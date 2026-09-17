@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-collector
+  labels:
+    {{- include "gpu-telemetry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+spec:
+  replicas: {{ .Values.replicaCount.collector }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: collector
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: collector
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: collector
+          image: "{{ .Values.image.repository }}/collector:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: MQ_ADDR
+              value: "{{ .Release.Name }}-broker:{{ .Values.broker.port }}"
+            - name: MQ_TOPIC
+              value: {{ .Values.topic | quote }}
+            - name: MQ_GROUP
+              value: {{ .Values.group | quote }}
+            - name: GATEWAY_URL
+              value: "http://{{ .Release.Name }}-gateway:{{ .Values.gateway.port }}"
+            - name: CONSUMER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name

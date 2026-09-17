@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-broker
+  labels:
+    {{- include "gpu-telemetry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: broker
+spec:
+  replicas: {{ .Values.replicaCount.broker }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: broker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: broker
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: broker
+          image: "{{ .Values.image.repository }}/broker:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: MQ_ADDR
+              value: ":{{ .Values.broker.port }}"
+          ports:
+            - containerPort: {{ .Values.broker.port }}
+              name: mq
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-broker
+spec:
+  selector:
+    app.kubernetes.io/component: broker
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - port: {{ .Values.broker.port }}
+      targetPort: mq
+      name: mq

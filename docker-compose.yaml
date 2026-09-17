@@ -1,0 +1,56 @@
+services:
+  broker:
+    build:
+      context: .
+      args:
+        SERVICE: broker
+    environment:
+      MQ_ADDR: ":9000"
+    ports:
+      - "9000:9000"
+  gateway:
+    build:
+      context: .
+      args:
+        SERVICE: gateway
+    environment:
+      HTTP_ADDR: ":8080"
+      DB_PATH: /var/lib/gpu-telemetry/telemetry.json
+    volumes:
+      - gateway-data:/var/lib/gpu-telemetry
+    ports:
+      - "8080:8080"
+    depends_on:
+      - broker
+  collector:
+    build:
+      context: .
+      args:
+        SERVICE: collector
+    environment:
+      MQ_ADDR: broker:9000
+      MQ_TOPIC: gpu-telemetry
+      MQ_GROUP: collectors
+      GATEWAY_URL: http://gateway:8080
+    depends_on:
+      - broker
+      - gateway
+    deploy:
+      replicas: 2
+  streamer:
+    build:
+      context: .
+      args:
+        SERVICE: streamer
+    environment:
+      MQ_ADDR: broker:9000
+      MQ_TOPIC: gpu-telemetry
+      CSV_PATH: /data/dcgm_metrics.csv
+      STREAMER_INDEX: "0"
+      STREAMER_COUNT: "1"
+      STREAM_INTERVAL: 5ms
+      STREAM_LOOP: "true"
+    depends_on:
+      - broker
+volumes:
+  gateway-data:

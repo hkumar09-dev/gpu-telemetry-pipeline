@@ -1,0 +1,30 @@
+replicaCount:
+  broker: 1
+  streamer: 2
+  collector: 2
+  gateway: 1
+
+image:
+  repository: gpu-telemetry
+  tag: local
+  pullPolicy: IfNotPresent
+
+broker:
+  port: 9000
+  partitions: 8
+
+gateway:
+  port: 8080
+  persistence:
+    enabled: true
+    size: 1Gi
+
+streamer:
+  csvPath: /data/dcgm_metrics.csv
+  interval: 10ms
+  loop: true
+
+topic: gpu-telemetry
+group: collectors
+
+resources: {}

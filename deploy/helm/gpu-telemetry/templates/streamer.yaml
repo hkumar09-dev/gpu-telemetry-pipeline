@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}-streamer
+  labels:
+    {{- include "gpu-telemetry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: streamer
+spec:
+  serviceName: {{ .Release.Name }}-streamer
+  replicas: {{ .Values.replicaCount.streamer }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: streamer
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: streamer
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: streamer
+          image: "{{ .Values.image.repository }}/streamer:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: MQ_ADDR
+              value: "{{ .Release.Name }}-broker:{{ .Values.broker.port }}"
+            - name: MQ_TOPIC
+              value: {{ .Values.topic | quote }}
+            - name: CSV_PATH
+              value: {{ .Values.streamer.csvPath | quote }}
+            - name: STREAMER_COUNT
+              value: "{{ .Values.replicaCount.streamer }}"
+            - name: STREAM_INTERVAL
+              value: {{ .Values.streamer.interval | quote }}
+            - name: STREAM_LOOP
+              value: "{{ .Values.streamer.loop }}"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: STREAMER_INDEX
+              value: "$(POD_NAME)"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              idx="${POD_NAME##*-}"
+              export STREAMER_INDEX="$idx"
+              exec /usr/local/bin/app
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-streamer
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/component: streamer
+    app.kubernetes.io/instance: {{ .Release.Name }}

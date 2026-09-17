@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-gateway
+  labels:
+    {{- include "gpu-telemetry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.replicaCount.gateway }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: gateway
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: gateway
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}/gateway:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: HTTP_ADDR
+              value: ":{{ .Values.gateway.port }}"
+            - name: DB_PATH
+              value: /var/lib/gpu-telemetry/telemetry.json
+          ports:
+            - containerPort: {{ .Values.gateway.port }}
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/gpu-telemetry
+      volumes:
+        - name: data
+          {{- if .Values.gateway.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-gateway
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-gateway
+spec:
+  selector:
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - port: {{ .Values.gateway.port }}
+      targetPort: http
+      name: http
+{{- if .Values.gateway.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-gateway
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.gateway.persistence.size }}
+{{- end }}

@@ -1,0 +1,110 @@
+openapi: 3.0.3
+info:
+  title: GPU Telemetry API
+  version: 1.0.0
+  description: Query GPU telemetry persisted by the elastic collector pipeline.
+servers:
+  - url: /
+paths:
+  /healthz:
+    get:
+      summary: Liveness and readiness
+      responses:
+        "200":
+          description: Service is healthy
+  /api/v1/gpus:
+    get:
+      summary: List all GPUs
+      description: Return every GPU for which telemetry has been persisted.
+      operationId: listGPUs
+      responses:
+        "200":
+          description: GPU inventory
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GPU"
+  /api/v1/gpus/{id}/telemetry:
+    get:
+      summary: Query telemetry by GPU
+      description: Return telemetry for a GPU UUID, ordered by processed_at. Optional inclusive time window.
+      operationId: queryTelemetry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: GPU UUID
+        - name: start_time
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive RFC3339 lower bound
+        - name: end_time
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive RFC3339 upper bound
+      responses:
+        "200":
+          description: Time-ordered telemetry
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Telemetry"
+        "400":
+          description: Invalid time filter
+components:
+  schemas:
+    GPU:
+      type: object
+      required: [id, gpu_index, device, model_name, hostname]
+      properties:
+        id:
+          type: string
+        gpu_index:
+          type: string
+        device:
+          type: string
+        model_name:
+          type: string
+        hostname:
+          type: string
+    Telemetry:
+      type: object
+      required: [processed_at, metric_name, uuid, value]
+      properties:
+        processed_at:
+          type: string
+          format: date-time
+        metric_name:
+          type: string
+        gpu_index:
+          type: string
+        device:
+          type: string
+        uuid:
+          type: string
+        model_name:
+          type: string
+        hostname:
+          type: string
+        container:
+          type: string
+        pod:
+          type: string
+        namespace:
+          type: string
+        value:
+          type: number
+        labels_raw:
+          type: string
