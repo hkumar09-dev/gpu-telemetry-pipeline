@@ -6,6 +6,7 @@ import (
 	"github.com/gpu-telemetry-pipeline/internal/api"
 )
 
+// generate openapi spec
 func main() {
 	path := "api/openapi.yaml"
 	if len(os.Args) > 1 {

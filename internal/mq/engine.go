@@ -19,13 +19,16 @@ type Delivery struct {
 	Offset    int64
 	Key       string
 	Payload   []byte
+	Attempts  int
 }
 
-// Config controls broker capacity and delivery semantics.
+// Config controls broker capacity, retries, and delivery semantics.
 type Config struct {
 	Partitions      int
 	MaxPerPartition int
 	AckTimeout      time.Duration
+	MaxRetries      int
+	RetryBackoff    time.Duration
 }
 
 func (c Config) withDefaults() Config {
@@ -38,13 +41,20 @@ func (c Config) withDefaults() Config {
 	if c.AckTimeout <= 0 {
 		c.AckTimeout = 30 * time.Second
 	}
+	if c.MaxRetries <= 0 {
+		c.MaxRetries = 5
+	}
+	if c.RetryBackoff <= 0 {
+		c.RetryBackoff = 5 * time.Millisecond
+	}
 	return c
 }
 
 type record struct {
-	offset  int64
-	key     string
-	payload []byte
+	offset   int64
+	key      string
+	payload  []byte
+	attempts int
 }
 
 type inflight struct {
@@ -54,14 +64,15 @@ type inflight struct {
 	offset    int64
 	key       string
 	payload   []byte
+	attempts  int
 	consumer  string
 	deadline  time.Time
 }
 
 type partition struct {
-	mu      sync.Mutex
-	next    int64
-	pending []record
+	mu  sync.Mutex
+	next int64
+	buf  chan record
 }
 
 type groupState struct {
@@ -72,33 +83,60 @@ type groupState struct {
 }
 
 // Engine is an in-process, multi-partition topic broker.
-// Messages with the same key always land on the same partition so GPU order is preserved.
+// Each partition is a bounded channel (backpressure when full).
+// Consumer groups share work by partition assignment.
+// Unacked messages retry, then land on topic+".dlq".
 type Engine struct {
-	cfg    Config
-	mu     sync.RWMutex
-	closed bool
-	topics map[string][]*partition
-	groups map[string]*groupState // key: topic/group
-	wake   chan struct{}
+	cfg     Config
+	ctx     context.Context
+	cancel  context.CancelFunc
+	mu      sync.RWMutex
+	closed  bool
+	topics  map[string][]*partition
+	groups  map[string]*groupState
+	wake    chan struct{}
+	retries chan inflight
 }
 
 func NewEngine(cfg Config) *Engine {
-	return &Engine{
-		cfg:    cfg.withDefaults(),
-		topics: make(map[string][]*partition),
-		groups: make(map[string]*groupState),
-		wake:   make(chan struct{}, 1),
+	cfg = cfg.withDefaults()
+	ctx, cancel := context.WithCancel(context.Background())
+	e := &Engine{
+		cfg:     cfg,
+		ctx:     ctx,
+		cancel:  cancel,
+		topics:  make(map[string][]*partition),
+		groups:  make(map[string]*groupState),
+		wake:    make(chan struct{}, 1),
+		retries: make(chan inflight, 1024),
 	}
+	go e.retryLoop()
+	go e.ackTimeoutLoop()
+	return e
 }
 
 func (e *Engine) Close() {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	if e.closed {
+		e.mu.Unlock()
+		return
+	}
 	e.closed = true
+	e.mu.Unlock()
+	e.cancel()
 	e.signal()
 }
 
 func (e *Engine) Publish(ctx context.Context, topic, key string, payload []byte) error {
+	if err := e.errIfClosed(); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
@@ -110,15 +148,21 @@ func (e *Engine) Publish(ctx context.Context, topic, key string, payload []byte)
 	idx := partitionFor(key, len(parts))
 	p := parts[idx]
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if len(p.pending) >= e.cfg.MaxPerPartition {
+	rec := record{
+		offset:  p.next,
+		key:     key,
+		payload: append([]byte(nil), payload...),
+	}
+	p.next++
+	p.mu.Unlock()
+
+	select {
+	case p.buf <- rec:
+		e.signal()
+		return nil
+	default:
 		return constants.ErrBackpressure
 	}
-	cp := append([]byte(nil), payload...)
-	p.pending = append(p.pending, record{offset: p.next, key: key, payload: cp})
-	p.next++
-	e.signal()
-	return nil
 }
 
 func (e *Engine) Subscribe(topic, group, consumerID string) {
@@ -146,7 +190,6 @@ func (e *Engine) Unsubscribe(topic, group, consumerID string) {
 		return
 	}
 	gs.mu.Lock()
-	defer gs.mu.Unlock()
 	members := gs.members[:0]
 	for _, m := range gs.members {
 		if m != consumerID {
@@ -154,13 +197,18 @@ func (e *Engine) Unsubscribe(topic, group, consumerID string) {
 		}
 	}
 	gs.members = members
+	var pending []inflight
 	for id, inf := range gs.inflight {
 		if inf.consumer == consumerID {
-			e.requeue(inf)
+			pending = append(pending, inf)
 			delete(gs.inflight, id)
 		}
 	}
 	gs.rebalance(e.cfg.Partitions)
+	gs.mu.Unlock()
+	for _, inf := range pending {
+		e.requeue(inf)
+	}
 	e.signal()
 }
 
@@ -225,8 +273,8 @@ func (e *Engine) Nack(topic, group, consumerID, id string) error {
 	}
 	delete(gs.inflight, id)
 	gs.mu.Unlock()
-	e.requeue(inf)
-	e.signal()
+	inf.attempts++
+	e.enqueueRetry(inf)
 	return nil
 }
 
@@ -236,11 +284,13 @@ func (e *Engine) Depth(topic string) int {
 	e.mu.RUnlock()
 	n := 0
 	for _, p := range parts {
-		p.mu.Lock()
-		n += len(p.pending)
-		p.mu.Unlock()
+		n += len(p.buf)
 	}
 	return n
+}
+
+func (e *Engine) DLQDepth(topic string) int {
+	return e.Depth(dlqTopic(topic))
 }
 
 func (e *Engine) tryConsume(topic, group, consumerID string) (Delivery, bool) {
@@ -260,38 +310,38 @@ func (e *Engine) tryConsume(topic, group, consumerID string) (Delivery, bool) {
 
 	now := time.Now()
 	for _, idx := range assigned {
-		p := parts[idx]
-		p.mu.Lock()
-		if len(p.pending) == 0 {
-			p.mu.Unlock()
+		if idx < 0 || idx >= len(parts) {
 			continue
 		}
-		rec := p.pending[0]
-		p.pending = p.pending[1:]
-		p.mu.Unlock()
-
-		id := fmt.Sprintf("%s-%d-%d-%d", topic, idx, rec.offset, now.UnixNano())
-		d := Delivery{
-			ID:        id,
-			Topic:     topic,
-			Partition: idx,
-			Offset:    rec.offset,
-			Key:       rec.key,
-			Payload:   rec.payload,
+		p := parts[idx]
+		select {
+		case rec := <-p.buf:
+			id := fmt.Sprintf("%s-%d-%d-%d", topic, idx, rec.offset, now.UnixNano())
+			d := Delivery{
+				ID:        id,
+				Topic:     topic,
+				Partition: idx,
+				Offset:    rec.offset,
+				Key:       rec.key,
+				Payload:   rec.payload,
+				Attempts:  rec.attempts,
+			}
+			gs.mu.Lock()
+			gs.inflight[id] = inflight{
+				id:        id,
+				topic:     topic,
+				partition: idx,
+				offset:    rec.offset,
+				key:       rec.key,
+				payload:   rec.payload,
+				attempts:  rec.attempts,
+				consumer:  consumerID,
+				deadline:  now.Add(e.cfg.AckTimeout),
+			}
+			gs.mu.Unlock()
+			return d, true
+		default:
 		}
-		gs.mu.Lock()
-		gs.inflight[id] = inflight{
-			id:        id,
-			topic:     topic,
-			partition: idx,
-			offset:    rec.offset,
-			key:       rec.key,
-			payload:   rec.payload,
-			consumer:  consumerID,
-			deadline:  now.Add(e.cfg.AckTimeout),
-		}
-		gs.mu.Unlock()
-		return d, true
 	}
 	return Delivery{}, false
 }
@@ -301,6 +351,22 @@ func (e *Engine) expireInflight(topic, group string) {
 	if gs == nil {
 		return
 	}
+	e.releaseExpired(gs)
+}
+
+func (e *Engine) expireAllInflight() {
+	e.mu.RLock()
+	groups := make([]*groupState, 0, len(e.groups))
+	for _, gs := range e.groups {
+		groups = append(groups, gs)
+	}
+	e.mu.RUnlock()
+	for _, gs := range groups {
+		e.releaseExpired(gs)
+	}
+}
+
+func (e *Engine) releaseExpired(gs *groupState) {
 	now := time.Now()
 	gs.mu.Lock()
 	var expired []inflight
@@ -312,10 +378,65 @@ func (e *Engine) expireInflight(topic, group string) {
 	}
 	gs.mu.Unlock()
 	for _, inf := range expired {
-		e.requeue(inf)
+		inf.attempts++
+		e.enqueueRetry(inf)
 	}
-	if len(expired) > 0 {
-		e.signal()
+}
+
+func (e *Engine) enqueueRetry(inf inflight) {
+	select {
+	case <-e.ctx.Done():
+		return
+	case e.retries <- inf:
+	default:
+		e.toDLQ(inf)
+	}
+}
+
+func (e *Engine) retryLoop() {
+	for {
+		select {
+		case <-e.ctx.Done():
+			return
+		case inf := <-e.retries:
+			e.handleRetry(inf)
+		}
+	}
+}
+
+func (e *Engine) handleRetry(inf inflight) {
+	if inf.attempts >= e.cfg.MaxRetries {
+		e.toDLQ(inf)
+		return
+	}
+	backoff := e.cfg.RetryBackoff * time.Duration(inf.attempts)
+	if backoff <= 0 {
+		backoff = e.cfg.RetryBackoff
+	}
+	timer := time.NewTimer(backoff)
+	select {
+	case <-e.ctx.Done():
+		timer.Stop()
+		return
+	case <-timer.C:
+	}
+	e.requeue(inf)
+}
+
+func (e *Engine) ackTimeoutLoop() {
+	interval := e.cfg.AckTimeout / 2
+	if interval < time.Millisecond {
+		interval = time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-e.ctx.Done():
+			return
+		case <-ticker.C:
+			e.expireAllInflight()
+		}
 	}
 }
 
@@ -326,10 +447,47 @@ func (e *Engine) requeue(inf inflight) {
 	if inf.partition < 0 || inf.partition >= len(parts) {
 		return
 	}
-	p := parts[inf.partition]
+	rec := record{
+		offset:   inf.offset,
+		key:      inf.key,
+		payload:  inf.payload,
+		attempts: inf.attempts,
+	}
+	select {
+	case <-e.ctx.Done():
+		return
+	case parts[inf.partition].buf <- rec:
+		e.signal()
+	case <-time.After(e.cfg.RetryBackoff):
+		e.enqueueRetry(inf)
+	}
+}
+
+func (e *Engine) toDLQ(inf inflight) {
+	topic := dlqTopic(inf.topic)
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return
+	}
+	parts := e.ensureTopicLocked(topic)
+	e.mu.Unlock()
+	idx := partitionFor(inf.key, len(parts))
+	p := parts[idx]
 	p.mu.Lock()
-	p.pending = append([]record{{offset: inf.offset, key: inf.key, payload: inf.payload}}, p.pending...)
+	rec := record{
+		offset:   p.next,
+		key:      inf.key,
+		payload:  inf.payload,
+		attempts: inf.attempts,
+	}
+	p.next++
 	p.mu.Unlock()
+	select {
+	case p.buf <- rec:
+		e.signal()
+	default:
+	}
 }
 
 func (e *Engine) ensureTopicLocked(topic string) []*partition {
@@ -339,7 +497,7 @@ func (e *Engine) ensureTopicLocked(topic string) []*partition {
 	}
 	parts = make([]*partition, e.cfg.Partitions)
 	for i := range parts {
-		parts[i] = &partition{}
+		parts[i] = &partition{buf: make(chan record, e.cfg.MaxPerPartition)}
 	}
 	e.topics[topic] = parts
 	return parts
@@ -394,6 +552,10 @@ func (g *groupState) rebalance(n int) {
 
 func groupKey(topic, group string) string {
 	return topic + "/" + group
+}
+
+func dlqTopic(topic string) string {
+	return topic + ".dlq"
 }
 
 func partitionFor(key string, n int) int {

@@ -10,6 +10,7 @@ import (
 
 func TestPublishConsumeAck(t *testing.T) {
 	e := NewEngine(Config{Partitions: 4, MaxPerPartition: 8, AckTimeout: time.Second})
+	t.Cleanup(e.Close)
 	ctx := context.Background()
 	if err := e.Publish(ctx, "t", "gpu-a", []byte("one")); err != nil {
 		t.Fatal(err)
@@ -32,6 +33,7 @@ func TestPublishConsumeAck(t *testing.T) {
 
 func TestPartitionAffinity(t *testing.T) {
 	e := NewEngine(Config{Partitions: 8})
+	t.Cleanup(e.Close)
 	ctx := context.Background()
 	for i := 0; i < 20; i++ {
 		if err := e.Publish(ctx, "t", "same-gpu", []byte("x")); err != nil {
@@ -56,6 +58,7 @@ func TestPartitionAffinity(t *testing.T) {
 
 func TestCompetingConsumers(t *testing.T) {
 	e := NewEngine(Config{Partitions: 4})
+	t.Cleanup(e.Close)
 	ctx := context.Background()
 	e.Subscribe("t", "g", "a")
 	e.Subscribe("t", "g", "b")
@@ -87,7 +90,8 @@ func TestCompetingConsumers(t *testing.T) {
 }
 
 func TestNackRedelivers(t *testing.T) {
-	e := NewEngine(Config{Partitions: 1, AckTimeout: time.Minute})
+	e := NewEngine(Config{Partitions: 1, AckTimeout: time.Minute, RetryBackoff: time.Millisecond})
+	t.Cleanup(e.Close)
 	ctx := context.Background()
 	_ = e.Publish(ctx, "t", "k", []byte("payload"))
 	e.Subscribe("t", "g", "c1")
@@ -108,7 +112,8 @@ func TestNackRedelivers(t *testing.T) {
 }
 
 func TestAckTimeoutRedelivers(t *testing.T) {
-	e := NewEngine(Config{Partitions: 1, AckTimeout: 20 * time.Millisecond})
+	e := NewEngine(Config{Partitions: 1, AckTimeout: 20 * time.Millisecond, RetryBackoff: time.Millisecond})
+	t.Cleanup(e.Close)
 	ctx := context.Background()
 	_ = e.Publish(ctx, "t", "k", []byte("late"))
 	e.Subscribe("t", "g", "c1")
@@ -127,6 +132,7 @@ func TestAckTimeoutRedelivers(t *testing.T) {
 
 func TestBackpressure(t *testing.T) {
 	e := NewEngine(Config{Partitions: 1, MaxPerPartition: 2})
+	t.Cleanup(e.Close)
 	ctx := context.Background()
 	_ = e.Publish(ctx, "t", "k", []byte("1"))
 	_ = e.Publish(ctx, "t", "k", []byte("2"))
@@ -137,7 +143,8 @@ func TestBackpressure(t *testing.T) {
 
 func TestTCPRoundTrip(t *testing.T) {
 	engine := NewEngine(Config{Partitions: 2})
-	srv := NewServer(engine, nil)
+	ctx := context.Background()
+	srv := NewServer(ctx, engine, nil)
 	go func() { _ = srv.ListenAndServe("127.0.0.1:0") }()
 	deadline := time.Now().Add(2 * time.Second)
 	for srv.Addr() == "" && time.Now().Before(deadline) {
@@ -146,9 +153,8 @@ func TestTCPRoundTrip(t *testing.T) {
 	if srv.Addr() == "" {
 		t.Fatal("server did not start")
 	}
-	t.Cleanup(func() { _ = srv.Close(context.Background()) })
+	t.Cleanup(func() { _ = srv.Close() })
 
-	ctx := context.Background()
 	client := NewClient(srv.Addr())
 	if err := client.Publish(ctx, "gpu-telemetry", "gpu-1", []byte(`{"ok":true}`)); err != nil {
 		t.Fatal(err)
@@ -167,5 +173,41 @@ func TestTCPRoundTrip(t *testing.T) {
 	}
 	if err := cons.Ack(ctx, d.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRetryThenDLQ(t *testing.T) {
+	e := NewEngine(Config{
+		Partitions:   1,
+		MaxRetries:   2,
+		RetryBackoff: time.Millisecond,
+		AckTimeout:   time.Minute,
+	})
+	t.Cleanup(e.Close)
+	ctx := context.Background()
+	if err := e.Publish(ctx, "t", "k", []byte("poison")); err != nil {
+		t.Fatal(err)
+	}
+	e.Subscribe("t", "g", "c1")
+	e.Subscribe("t.dlq", "dlq", "d1")
+	for i := 0; i < 2; i++ {
+		d, err := e.Consume(ctx, "t", "g", "c1", time.Second)
+		if err != nil {
+			t.Fatalf("consume %d: %v", i, err)
+		}
+		if err := e.Nack("t", "g", "c1", d.ID); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(8 * time.Millisecond)
+	}
+	if _, err := e.Consume(ctx, "t", "g", "c1", 40*time.Millisecond); err != constants.ErrTimeout {
+		t.Fatalf("want timeout on main topic, got %v", err)
+	}
+	d, err := e.Consume(ctx, "t.dlq", "dlq", "d1", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(d.Payload) != "poison" {
+		t.Fatalf("dlq payload %s", d.Payload)
 	}
 }

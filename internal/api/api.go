@@ -19,9 +19,6 @@ type Service struct {
 	ctx  context.Context
 }
 
-type Svc interface {
-}
-
 func NewService(repo ports.Repository, log *slog.Logger) *Service {
 	ctx := context.Background()
 	if log == nil {
@@ -30,20 +27,6 @@ func NewService(repo ports.Repository, log *slog.Logger) *Service {
 
 	return &Service{repo: repo, log: log, ctx: ctx}
 }
-
-//func (a *API) Handler() http.Handler {
-//	mux := http.NewServeMux()
-//	mux.HandleFunc("GET /healthz", a.health)
-//	mux.HandleFunc("GET /healthz/{$}", a.health)
-//	mux.HandleFunc("GET /livez", a.health)
-//	mux.HandleFunc("GET /livez/{$}", a.health)
-//	mux.HandleFunc("GET /openapi.yaml", a.openapi)
-//	mux.HandleFunc("GET /api/openapi.yaml", a.openapi)
-//	mux.HandleFunc("GET /api/v1/gpus", a.listGPUs)
-//	mux.HandleFunc("GET /api/v1/gpus/{id}/telemetry", a.queryTelemetry)
-//	mux.HandleFunc("POST /internal/v1/telemetry", a.ingest)
-//	return logging(a.log, mux)
-//}
 
 func (a *Service) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -95,11 +78,13 @@ func (a *Service) ingest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
+
 	if err := t.Validate(); err != nil {
 		a.log.Error("error in validation", "err", err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+
 	if err := a.repo.Save(r.Context(), t); err != nil {
 		a.log.Error("error in saving", "err", err)
 		a.fail(w, http.StatusInternalServerError, err)

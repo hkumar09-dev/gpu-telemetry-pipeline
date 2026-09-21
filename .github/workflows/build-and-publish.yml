@@ -13,27 +13,50 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
-          chmod 600 ~/.ssh/ec2_key
+      - name: Download dependencies
+        run: go mod download
 
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+      - name: Verify dependencies
+        run: go mod verify
 
-      - name: Deploy
-        run: |
-          ssh -i ~/.ssh/ec2_key ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+      - name: Run unit tests
+        run: go test ./... -v
 
-            cd ~/gpu-telemetry-pipeline
+      - name: Run tests with race detector
+        run: go test -race ./...
 
-            git pull origin main
+      - name: Generate coverage
+        run: go test ./... -coverprofile=coverage.out
 
-            sudo kubectl apply -f k8s/
+      - name: Display coverage
+        run: go tool cover -func=coverage.out
 
-            sudo kubectl rollout restart deployment/gpu-telemetry
-
-            sudo kubectl rollout status deployment/gpu-telemetry
-
-          EOF
+#      - name: Setup SSH
+#        run: |
+#          mkdir -p ~/.ssh
+#          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
+#          chmod 600 ~/.ssh/ec2_key
+#
+#          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+#
+#      - name: Deploy
+#        run: |
+#          ssh -i ~/.ssh/ec2_key ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+#
+#            cd ~/gpu-telemetry-pipeline
+#
+#            git pull origin main
+#
+#            sudo kubectl apply -f k8s/
+#
+#            sudo kubectl rollout restart deployment/gpu-telemetry
+#
+#            sudo kubectl rollout status deployment/gpu-telemetry
+#
+#          EOF
