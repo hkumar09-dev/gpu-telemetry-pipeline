@@ -18,6 +18,17 @@ spec:
         {{- include "gpu-telemetry.selectorLabels" . | nindent 8 }}
     spec:
       {{- include "gpu-telemetry.podSecurity" . | nindent 6 }}
+      initContainers:
+        - name: wait-gateway
+          image: {{ include "gpu-telemetry.image" (dict "root" . "service" "collector") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - until wget -qO- "http://{{ .Release.Name }}-gateway:{{ .Values.gateway.port }}/healthz"; do sleep 2; done
       containers:
         - name: collector
           image: {{ include "gpu-telemetry.image" (dict "root" . "service" "collector") }}

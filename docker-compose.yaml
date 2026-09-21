@@ -18,10 +18,17 @@ services:
     environment:
       HTTP_ADDR: ":8080"
       DB_PATH: /var/lib/gpu-telemetry/telemetry.json
+    user: "0:0"
     volumes:
       - gateway-data:/var/lib/gpu-telemetry
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 3s
     depends_on:
       - broker
     networks:
@@ -37,8 +44,10 @@ services:
       MQ_GROUP: collectors
       GATEWAY_URL: http://gateway:8080
     depends_on:
-      - broker
-      - gateway
+      broker:
+        condition: service_started
+      gateway:
+        condition: service_healthy
     deploy:
       replicas: 2
     networks:

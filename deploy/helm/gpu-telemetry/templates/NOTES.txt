@@ -1,12 +1,10 @@
-GPU telemetry pipeline is installed.
+GPU telemetry pipeline is installed via Helm (release {{ .Release.Name }}).
 
   kubectl -n {{ .Release.Namespace }} get pods,svc
 
-Gateway:
-{{- if eq .Values.gateway.service.type "NodePort" }}
-  minikube service {{ .Release.Name }}-gateway -n {{ .Release.Namespace }}
-  curl $(minikube service {{ .Release.Name }}-gateway -n {{ .Release.Namespace }} --url)/healthz
-{{- else }}
+Port-forward the gateway:
+
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }}-gateway {{ .Values.gateway.port }}:{{ .Values.gateway.port }}
+
   curl -s localhost:{{ .Values.gateway.port }}/healthz
-{{- end }}
+  curl -s localhost:{{ .Values.gateway.port }}/api/v1/gpus | head

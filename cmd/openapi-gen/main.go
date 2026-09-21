@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/gpu-telemetry-pipeline/internal/gateway"
+	"github.com/gpu-telemetry-pipeline/internal/api"
 )
 
 func main() {
@@ -11,7 +11,7 @@ func main() {
 	if len(os.Args) > 1 {
 		path = os.Args[1]
 	}
-	if err := os.WriteFile(path, []byte(gateway.OpenAPISpec), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(api.OpenAPISpec), 0o644); err != nil {
 		panic(err)
 	}
 }

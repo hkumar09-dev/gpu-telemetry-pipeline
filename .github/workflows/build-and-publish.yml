@@ -1,4 +1,39 @@
-name: build-and-publish.yml
+name: Deploy to EC2
+
 on:
+  push:
+    branches:
+      - main
 
 jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy
+        run: |
+          ssh -i ~/.ssh/ec2_key ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+
+            cd ~/gpu-telemetry-pipeline
+
+            git pull origin main
+
+            sudo kubectl apply -f k8s/
+
+            sudo kubectl rollout restart deployment/gpu-telemetry
+
+            sudo kubectl rollout status deployment/gpu-telemetry
+
+          EOF

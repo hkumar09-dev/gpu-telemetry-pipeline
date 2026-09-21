@@ -16,12 +16,18 @@ broker:
 gateway:
   port: 8080
   service:
-    type: NodePort
-    nodePort: 30080
+    type: ClusterIP
+    nodePort:
   persistence:
     enabled: true
     size: 1Gi
     storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
 
 streamer:
   csvPath: /data/dcgm_metrics.csv

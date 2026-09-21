@@ -25,45 +25,56 @@ type Config struct {
 // Streamer reads telemetry and publishes a shard of the dataset.
 // Scaling: set Index/Count from a StatefulSet ordinal so replicas are disjoint.
 type Streamer struct {
-	src    ports.TelemetrySource
-	pub    ports.Publisher
-	clock  clock.Clock
-	cfg    Config
-	log    *slog.Logger
+	src   ports.TelemetrySource
+	pub   ports.Publisher
+	clock clock.Clock
+	cfg   Config
+	log   *slog.Logger
 }
 
+// New creates a new streamer.
 func New(src ports.TelemetrySource, pub ports.Publisher, clk clock.Clock, cfg Config, log *slog.Logger) *Streamer {
 	if clk == nil {
 		clk = clock.SystemClock{}
 	}
+
 	if log == nil {
 		log = slog.Default()
 	}
+
 	if cfg.Count <= 0 {
 		cfg.Count = 1
 	}
+
 	if cfg.Index < 0 || cfg.Index >= cfg.Count {
 		cfg.Index = 0
 	}
+
 	if cfg.Topic == "" {
 		cfg.Topic = "gpu-telemetry"
 	}
+
 	if cfg.Interval <= 0 {
 		cfg.Interval = 10 * time.Millisecond
 	}
+	
 	return &Streamer{src: src, pub: pub, clock: clk, cfg: cfg, log: log}
 }
 
+// Run starts the streamer.
 func (s *Streamer) Run(ctx context.Context) error {
 	rows, err := s.src.Load()
 	if err != nil {
+		s.log.Error("load telemetry failed", "err", err)
 		return fmt.Errorf("load telemetry: %w", err)
 	}
+
 	s.log.Info("streamer loaded csv", "rows", len(rows), "index", s.cfg.Index, "count", s.cfg.Count)
 
 	iter := 0
 	for {
 		if err := s.emitPass(ctx, rows); err != nil {
+			s.log.Error("emit pass failed", "err", err)
 			return err
 		}
 		iter++
@@ -73,6 +84,7 @@ func (s *Streamer) Run(ctx context.Context) error {
 	}
 }
 
+// emitPass emits a pass of the dataset.
 func (s *Streamer) emitPass(ctx context.Context, rows []domain.Telemetry) error {
 	for i, row := range rows {
 		if err := ctx.Err(); err != nil {
@@ -88,11 +100,16 @@ func (s *Streamer) emitPass(ctx context.Context, rows []domain.Telemetry) error 
 		}
 		body, err := json.Marshal(row)
 		if err != nil {
+			s.log.Error("skip invalid row", "index", i, "err", err)
 			return err
 		}
+
 		if err := s.pub.Publish(ctx, s.cfg.Topic, row.UUID, body); err != nil {
+			s.log.Error("publish failed", "index", i, "err", err)
 			return fmt.Errorf("publish: %w", err)
 		}
+
+		// Wait for interval
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

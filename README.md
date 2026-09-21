@@ -91,35 +91,31 @@ Docker Compose:
 docker compose up --build --scale collector=2
 ```
 
-## Kubernetes
+## Kubernetes (Helm)
 
-Minikube (no Helm required):
+Requires Helm 3 and a Kubernetes cluster in `kubectl`. Local example with Kind:
 
 ```bash
-minikube start
-make k8s-deploy
+kind create cluster --name gpu-telemetry
+make helm-deploy
 kubectl -n gpu-telemetry port-forward svc/gpu-gateway 8080:8080
 curl -s localhost:8080/healthz
 curl -s localhost:8080/api/v1/gpus | head
 ```
 
-On some minikube drivers the gateway is also reachable as NodePort `30080` (`minikube service gpu-gateway -n gpu-telemetry --url`).
-
 Scale:
 
 ```bash
-kubectl -n gpu-telemetry scale statefulset gpu-streamer --replicas=4
-kubectl -n gpu-telemetry set env statefulset/gpu-streamer STREAMER_COUNT=4
-kubectl -n gpu-telemetry scale deploy gpu-collector --replicas=3
+helm upgrade gpu deploy/helm/gpu-telemetry --namespace gpu-telemetry \
+  --reuse-values \
+  --set replicaCount.streamer=4 \
+  --set replicaCount.collector=3
 ```
 
-
-Helm (optional):
+Uninstall:
 
 ```bash
-make docker-build
-minikube image load gpu-telemetry/broker:local gpu-telemetry/streamer:local gpu-telemetry/collector:local gpu-telemetry/gateway:local
-helm upgrade --install gpu deploy/helm/gpu-telemetry --namespace gpu-telemetry --create-namespace
+make helm-delete
 ```
 
 Streamers take the StatefulSet ordinal from `POD_NAME` so shards stay disjoint. Collectors join the same consumer group with `CONSUMER_ID=pod name`.
@@ -133,11 +129,10 @@ internal/ports       interfaces (SOLID)
 internal/mq          custom broker engine + TCP
 internal/streamer    CSV shard publisher
 internal/collector   consumer + persist
-internal/gateway     HTTP API
+internal/api         HTTP API
 internal/storage     JSON file / memory / HTTP writer
 data/                full DCGM CSV
-deploy/k8s           kubectl/kustomize manifests
-deploy/helm          Kubernetes Helm chart
+deploy/helm          Helm chart (primary Kubernetes install)
 ```
 
 ## AI assistance

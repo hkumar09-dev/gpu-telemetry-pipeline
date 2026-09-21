@@ -27,6 +27,7 @@ const (
 	opResponse op = "response"
 )
 
+// frame is a message frame.
 type frame struct {
 	Op         op     `json:"op"`
 	Topic      string `json:"topic,omitempty"`
@@ -41,6 +42,7 @@ type frame struct {
 	Error      string `json:"error,omitempty"`
 }
 
+// writeFrame writes a frame to the writer.
 func writeFrame(w io.Writer, f frame) error {
 	body, err := json.Marshal(f)
 	if err != nil {
@@ -55,6 +57,7 @@ func writeFrame(w io.Writer, f frame) error {
 	return err
 }
 
+// readFrame reads a frame from the reader.
 func readFrame(r *bufio.Reader) (frame, error) {
 	var hdr [4]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
@@ -81,6 +84,7 @@ type Client struct {
 	dial func(ctx context.Context, addr string) (net.Conn, error)
 }
 
+// NewClient creates a new client.
 func NewClient(addr string) *Client {
 	return &Client{
 		addr: addr,
@@ -91,6 +95,7 @@ func NewClient(addr string) *Client {
 	}
 }
 
+// Publish publishes a message.
 func (c *Client) Publish(ctx context.Context, topic, key string, payload []byte) error {
 	conn, err := c.dial(ctx, c.addr)
 	if err != nil {
@@ -112,6 +117,7 @@ func (c *Client) Publish(ctx context.Context, topic, key string, payload []byte)
 	return nil
 }
 
+// Subscribe subscribes to a topic.
 func (c *Client) Subscribe(ctx context.Context, topic, group, consumerID string) (ports.Consumer, error) {
 	conn, err := c.dial(ctx, c.addr)
 	if err != nil {
@@ -142,6 +148,7 @@ func (c *Client) Subscribe(ctx context.Context, topic, group, consumerID string)
 	}, nil
 }
 
+// tcpConsumer is a TCP consumer.
 type tcpConsumer struct {
 	mu         sync.Mutex
 	conn       net.Conn
@@ -151,6 +158,7 @@ type tcpConsumer struct {
 	consumerID string
 }
 
+// Consume consumes a message.
 func (c *tcpConsumer) Consume(ctx context.Context, timeout time.Duration) (ports.Delivery, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -163,10 +171,13 @@ func (c *tcpConsumer) Consume(ctx context.Context, timeout time.Duration) (ports
 	}); err != nil {
 		return ports.Delivery{}, err
 	}
+
 	if err := c.conn.SetReadDeadline(deadline(ctx, timeout+2*time.Second)); err != nil {
 		return ports.Delivery{}, err
 	}
+
 	resp, err := readFrame(c.reader)
+
 	_ = c.conn.SetReadDeadline(time.Time{})
 	if err != nil {
 		return ports.Delivery{}, err
@@ -209,6 +220,7 @@ func (c *tcpConsumer) ctrl(ctx context.Context, o op, id string) error {
 	}); err != nil {
 		return err
 	}
+
 	resp, err := readFrame(c.reader)
 	if err != nil {
 		return err
@@ -216,6 +228,7 @@ func (c *tcpConsumer) ctrl(ctx context.Context, o op, id string) error {
 	if resp.Error != "" {
 		return fmt.Errorf("%s", resp.Error)
 	}
+	
 	return nil
 }
 

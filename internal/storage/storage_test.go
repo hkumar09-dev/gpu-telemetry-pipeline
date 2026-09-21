@@ -34,6 +34,23 @@ func TestMemoryQueryWindow(t *testing.T) {
 	}
 }
 
+func TestMemoryCapsRecords(t *testing.T) {
+	m := NewMemory()
+	m.maxRecords = 3
+	ctx := context.Background()
+	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		_ = m.Save(ctx, domain.Telemetry{UUID: "g1", MetricName: "u", ProcessedAt: ts.Add(time.Duration(i) * time.Second), Value: float64(i), Hostname: "h", GPUIndex: "0"})
+	}
+	rows, err := m.QueryByGPU(ctx, "g1", domain.TimeWindow{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 || rows[0].Value != 2 || rows[2].Value != 4 {
+		t.Fatalf("capped %+v", rows)
+	}
+}
+
 func TestFileRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "t.json")
 	db, err := Open(path)

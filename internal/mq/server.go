@@ -12,37 +12,44 @@ import (
 
 // Server exposes Engine over a length-prefixed JSON TCP protocol.
 type Server struct {
-	engine *Engine
-	log    *slog.Logger
-	mu     sync.Mutex
-	ln     net.Listener
-	wg     sync.WaitGroup
+	ctx      context.Context
+	engine   *Engine
+	log      *slog.Logger
+	mu       sync.Mutex
+	listener net.Listener
+	wg       sync.WaitGroup
 }
 
-func NewServer(engine *Engine, log *slog.Logger) *Server {
+func NewServer(ctx context.Context, engine *Engine, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{engine: engine, log: log}
+	return &Server{ctx: ctx, engine: engine, log: log}
 }
 
+// ListenAndServe starts a broker server.
 func (s *Server) ListenAndServe(addr string) error {
-	ln, err := net.Listen("tcp", addr)
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
+		s.log.Error("listen failed", "err", err)
 		return err
 	}
+
 	s.mu.Lock()
-	s.ln = ln
+	s.listener = listener
 	s.mu.Unlock()
-	s.log.Info("broker listening", "addr", ln.Addr().String())
-	return s.serve(ln)
+	s.log.Info("broker listening", "addr", listener.Addr().String())
+	return s.serve(listener)
 }
 
+// Serve starts a broker server.
 func (s *Server) serve(ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			s.log.Error("accept failed", "err", err)
 			if errors.Is(err, net.ErrClosed) {
+				s.log.Info("broker closed")
 				return nil
 			}
 			return err
@@ -55,9 +62,9 @@ func (s *Server) serve(ln net.Listener) error {
 	}
 }
 
-func (s *Server) Close(ctx context.Context) error {
+func (s *Server) Close() error {
 	s.mu.Lock()
-	ln := s.ln
+	ln := s.listener
 	s.mu.Unlock()
 	if ln != nil {
 		_ = ln.Close()
@@ -70,10 +77,10 @@ func (s *Server) Close(ctx context.Context) error {
 func (s *Server) Addr() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ln == nil {
+	if s.listener == nil {
 		return ""
 	}
-	return s.ln.Addr().String()
+	return s.listener.Addr().String()
 }
 
 func (s *Server) handle(conn net.Conn) {

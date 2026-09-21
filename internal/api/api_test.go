@@ -1,4 +1,4 @@
-package gateway
+package api
 
 import (
 	"bytes"
@@ -14,8 +14,8 @@ import (
 
 func TestListAndQuery(t *testing.T) {
 	repo := storage.NewMemory()
-	api := New(repo, nil)
-	srv := httptest.NewServer(api.Handler())
+	h := NewHandler(NewService(repo, nil))
+	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
 	ts := time.Date(2026, 9, 17, 4, 0, 0, 0, time.UTC)
@@ -67,18 +67,17 @@ func TestListAndQuery(t *testing.T) {
 }
 
 func TestBadTimeFilter(t *testing.T) {
-	api := New(storage.NewMemory(), nil)
+	h := NewHandler(NewService(storage.NewMemory(), nil))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/gpus/x/telemetry?start_time=not-a-date", nil)
 	rec := httptest.NewRecorder()
-	api.Handler().ServeHTTP(rec, req)
+	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("code %d", rec.Code)
 	}
 }
 
 func TestHealthAndOpenAPI(t *testing.T) {
-	api := New(storage.NewMemory(), nil)
-	h := api.Handler()
+	h := NewHandler(NewService(storage.NewMemory(), nil))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != 200 {

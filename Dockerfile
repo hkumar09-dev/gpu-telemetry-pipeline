@@ -8,8 +8,10 @@ ARG SERVICE=gateway
 RUN CGO_ENABLED=0 go build -o /out/app ./cmd/${SERVICE}
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates \
-	&& adduser -D -H -u 65532 appuser
+RUN apk add --no-cache ca-certificates wget \
+	&& adduser -D -H -u 65532 appuser \
+	&& mkdir -p /var/lib/gpu-telemetry \
+	&& chown 65532:65532 /var/lib/gpu-telemetry
 WORKDIR /app
 COPY --from=build /out/app /usr/local/bin/app
 COPY data/dcgm_metrics.csv /data/dcgm_metrics.csv

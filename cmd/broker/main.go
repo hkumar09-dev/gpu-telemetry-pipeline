@@ -13,10 +13,13 @@ import (
 )
 
 func main() {
+
+	// Setup logging
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	addr := utils.Getenv("MQ_ADDR", ":9000")
 	engine := mq.NewEngine(mq.Config{})
-	srv := mq.NewServer(engine, log)
+	ctx := context.Background()
+	srv := mq.NewServer(ctx, engine, log)
 
 	go func() {
 		if err := srv.ListenAndServe(addr); err != nil {
@@ -35,19 +38,12 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	//_ = ctx
-	//
-	//if err := srv.Shutdown(ctx); err != nil {
-	//	log.Printf("graceful shutdown failed: %v", err)
-	//
-	//	// Force close if graceful shutdown exceeds timeout
-	//	_ = srv.Close()
-	//}
 
 	wait()
-	_ = srv.Close(ctx)
+	_ = srv.Close()
 }
 
+// Wait for SIGTERM / SIGINT
 func wait() {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)

@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gpu-telemetry-pipeline/internal/gateway"
+	"github.com/gpu-telemetry-pipeline/internal/api"
 	"github.com/gpu-telemetry-pipeline/internal/storage"
 )
 
@@ -23,10 +23,12 @@ func main() {
 	}
 	defer db.Close()
 
-	api := gateway.New(db, log)
+	svc := api.NewService(db, log)
+
+	//api := api.New(db, log)
 	srv := &http.Server{
 		Addr:              getenv("HTTP_ADDR", ":8080"),
-		Handler:           api.Handler(),
+		Handler:           api.NewHandler(svc),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gpu-telemetry-pipeline/constants"
@@ -51,8 +52,15 @@ func (c *Collector) Run(ctx context.Context) error {
 			continue
 		}
 		if err := c.handle(ctx, d); err != nil {
-			c.log.Error("handle delivery", "id", d.ID, "err", err)
+			c.log.Warn("handle delivery", "id", d.ID, "err", err)
 			_ = c.consumer.Nack(ctx, d.ID)
+			if retryableWrite(err) {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(time.Second):
+				}
+			}
 			continue
 		}
 		if err := c.consumer.Ack(ctx, d.ID); err != nil {
@@ -64,10 +72,22 @@ func (c *Collector) Run(ctx context.Context) error {
 func (c *Collector) handle(ctx context.Context, d ports.Delivery) error {
 	var t domain.Telemetry
 	if err := json.Unmarshal(d.Payload, &t); err != nil {
+		c.log.Error("Error in marshalling of payload")
 		return err
 	}
 	if err := t.Validate(); err != nil {
+		c.log.Error("Error in validating the response")
 		return err
 	}
 	return c.writer.Write(ctx, t)
+}
+
+func retryableWrite(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "no such host")
 }
