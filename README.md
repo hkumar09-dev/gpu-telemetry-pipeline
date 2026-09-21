@@ -113,6 +113,7 @@ kubectl -n gpu-telemetry set env statefulset/gpu-streamer STREAMER_COUNT=4
 kubectl -n gpu-telemetry scale deploy gpu-collector --replicas=3
 ```
 
+
 Helm (optional):
 
 ```bash
