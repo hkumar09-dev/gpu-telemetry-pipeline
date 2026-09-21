@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/domain"
 )
 
 const expectedColumns = 12

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/domain"
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/storage"
+	"github.com/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/storage"
 )
 
 func TestListAndQuery(t *testing.T) {
@@ -83,6 +83,11 @@ func TestHealthAndOpenAPI(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != 200 {
 		t.Fatal(rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz/", nil))
+	if rec.Code != 200 {
+		t.Fatalf("trailing slash healthz %d", rec.Code)
 	}
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil))

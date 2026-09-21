@@ -8,6 +8,8 @@ services:
       MQ_ADDR: ":9000"
     ports:
       - "9000:9000"
+    networks:
+      - gpu-telemetry-net
   gateway:
     build:
       context: .
@@ -22,6 +24,8 @@ services:
       - "8080:8080"
     depends_on:
       - broker
+    networks:
+      - gpu-telemetry-net
   collector:
     build:
       context: .
@@ -37,6 +41,8 @@ services:
       - gateway
     deploy:
       replicas: 2
+    networks:
+      - gpu-telemetry-net
   streamer:
     build:
       context: .
@@ -52,5 +58,12 @@ services:
       STREAM_LOOP: "true"
     depends_on:
       - broker
+    networks:
+      - gpu-telemetry-net
+
+networks:
+  gpu-telemetry-net:
+    driver: bridge
+
 volumes:
   gateway-data:

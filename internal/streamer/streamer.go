@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/clock"
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/domain"
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/ports"
+	"github.com/gpu-telemetry-pipeline/internal/clock"
+	"github.com/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/ports"
 )
 
 // Config controls CSV sharding and emit cadence.

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/clock"
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/clock"
+	"github.com/gpu-telemetry-pipeline/internal/domain"
 )
 
 type stubSource struct{ rows []domain.Telemetry }

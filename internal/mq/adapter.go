@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/ports"
+	"github.com/gpu-telemetry-pipeline/internal/ports"
 )
 
 // EnginePublisher adapts Engine to ports.Publisher.

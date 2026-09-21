@@ -8,9 +8,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/collector"
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/mq"
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/storage"
+	"github.com/gpu-telemetry-pipeline/internal/collector"
+	"github.com/gpu-telemetry-pipeline/internal/mq"
+	"github.com/gpu-telemetry-pipeline/internal/ports"
+	"github.com/gpu-telemetry-pipeline/internal/storage"
 )
 
 func main() {
@@ -20,7 +21,7 @@ func main() {
 
 	client := mq.NewClient(getenv("MQ_ADDR", "127.0.0.1:9000"))
 	id := getenv("CONSUMER_ID", hostname())
-	cons, err := client.Subscribe(ctx, getenv("MQ_TOPIC", "gpu-telemetry"), getenv("MQ_GROUP", "collectors"), id)
+	cons, err := subscribeWithRetry(ctx, client, log, id)
 	if err != nil {
 		log.Error("subscribe failed", "err", err)
 		os.Exit(1)
@@ -49,4 +50,21 @@ func hostname() string {
 		return "collector"
 	}
 	return h
+}
+
+func subscribeWithRetry(ctx context.Context, client *mq.Client, log *slog.Logger, id string) (ports.Consumer, error) {
+	topic := getenv("MQ_TOPIC", "gpu-telemetry")
+	group := getenv("MQ_GROUP", "collectors")
+	for {
+		cons, err := client.Subscribe(ctx, topic, group, id)
+		if err == nil {
+			return cons, nil
+		}
+		log.Error("subscribe failed, retrying", "err", err)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }

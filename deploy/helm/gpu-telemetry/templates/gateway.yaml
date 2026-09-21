@@ -7,20 +7,24 @@ metadata:
     app.kubernetes.io/component: gateway
 spec:
   replicas: {{ .Values.replicaCount.gateway }}
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/component: gateway
-      app.kubernetes.io/instance: {{ .Release.Name }}
+      {{- include "gpu-telemetry.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
         app.kubernetes.io/component: gateway
-        app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- include "gpu-telemetry.selectorLabels" . | nindent 8 }}
     spec:
+      {{- include "gpu-telemetry.podSecurity" . | nindent 6 }}
       containers:
         - name: gateway
-          image: "{{ .Values.image.repository }}/gateway:{{ .Values.image.tag }}"
+          image: {{ include "gpu-telemetry.image" (dict "root" . "service" "gateway") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "gpu-telemetry.containerSecurity" . | nindent 10 }}
           env:
             - name: HTTP_ADDR
               value: ":{{ .Values.gateway.port }}"
@@ -33,10 +37,16 @@ spec:
             httpGet:
               path: /healthz
               port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /livez
               port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /var/lib/gpu-telemetry
@@ -53,22 +63,35 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ .Release.Name }}-gateway
+  labels:
+    {{- include "gpu-telemetry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
 spec:
+  type: {{ .Values.gateway.service.type }}
   selector:
     app.kubernetes.io/component: gateway
-    app.kubernetes.io/instance: {{ .Release.Name }}
+    {{- include "gpu-telemetry.selectorLabels" . | nindent 4 }}
   ports:
     - port: {{ .Values.gateway.port }}
       targetPort: http
       name: http
+      {{- if and (eq .Values.gateway.service.type "NodePort") .Values.gateway.service.nodePort }}
+      nodePort: {{ .Values.gateway.service.nodePort }}
+      {{- end }}
 {{- if .Values.gateway.persistence.enabled }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ .Release.Name }}-gateway
+  labels:
+    {{- include "gpu-telemetry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
 spec:
   accessModes: ["ReadWriteOnce"]
+  {{- if .Values.gateway.persistence.storageClassName }}
+  storageClassName: {{ .Values.gateway.persistence.storageClassName | quote }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.gateway.persistence.size }}

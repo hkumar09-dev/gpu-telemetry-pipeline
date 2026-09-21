@@ -5,14 +5,14 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/domain"
 )
 
 // Memory is an in-memory repository used by unit tests.
 type Memory struct {
-	mu         sync.RWMutex
-	gpus       map[string]domain.GPU
-	telemetry  []domain.Telemetry
+	mu        sync.RWMutex
+	gpus      map[string]domain.GPU
+	telemetry []domain.Telemetry
 }
 
 func NewMemory() *Memory {

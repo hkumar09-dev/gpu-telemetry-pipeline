@@ -1,17 +1,20 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/mq"
+	"github.com/gpu-telemetry-pipeline/internal/mq"
+	"github.com/gpu-telemetry-pipeline/utils"
 )
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	addr := getenv("MQ_ADDR", ":9000")
+	addr := utils.Getenv("MQ_ADDR", ":9000")
 	engine := mq.NewEngine(mq.Config{})
 	srv := mq.NewServer(engine, log)
 
@@ -22,15 +25,27 @@ func main() {
 		}
 	}()
 
-	wait()
-	_ = srv.Close()
-}
+	// Wait for SIGTERM / SIGINT
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 
-func getenv(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
+	<-stop
+
+	log.Info("shutdown signal received")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	//_ = ctx
+	//
+	//if err := srv.Shutdown(ctx); err != nil {
+	//	log.Printf("graceful shutdown failed: %v", err)
+	//
+	//	// Force close if graceful shutdown exceeds timeout
+	//	_ = srv.Close()
+	//}
+
+	wait()
+	_ = srv.Close(ctx)
 }
 
 func wait() {

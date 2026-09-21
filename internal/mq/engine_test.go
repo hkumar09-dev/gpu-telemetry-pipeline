@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/gpu-telemetry-pipeline/constants"
 )
 
 func TestPublishConsumeAck(t *testing.T) {
@@ -23,7 +25,7 @@ func TestPublishConsumeAck(t *testing.T) {
 	if err := e.Ack("t", "g", "c1", d.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Consume(ctx, "t", "g", "c1", 20*time.Millisecond); err != ErrTimeout {
+	if _, err := e.Consume(ctx, "t", "g", "c1", 20*time.Millisecond); err != constants.ErrTimeout {
 		t.Fatalf("want timeout after ack, got %v", err)
 	}
 }
@@ -128,7 +130,7 @@ func TestBackpressure(t *testing.T) {
 	ctx := context.Background()
 	_ = e.Publish(ctx, "t", "k", []byte("1"))
 	_ = e.Publish(ctx, "t", "k", []byte("2"))
-	if err := e.Publish(ctx, "t", "k", []byte("3")); err != ErrBackpressure {
+	if err := e.Publish(ctx, "t", "k", []byte("3")); err != constants.ErrBackpressure {
 		t.Fatalf("want backpressure, got %v", err)
 	}
 }
@@ -144,7 +146,7 @@ func TestTCPRoundTrip(t *testing.T) {
 	if srv.Addr() == "" {
 		t.Fatal("server did not start")
 	}
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = srv.Close(context.Background()) })
 
 	ctx := context.Background()
 	client := NewClient(srv.Addr())

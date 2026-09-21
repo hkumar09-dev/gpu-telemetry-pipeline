@@ -9,11 +9,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/gateway"
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/storage"
+	"github.com/gpu-telemetry-pipeline/internal/gateway"
+	"github.com/gpu-telemetry-pipeline/internal/storage"
 )
 
 func main() {
+
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	db, err := storage.Open(getenv("DB_PATH", "/var/lib/gpu-telemetry/telemetry.json"))
 	if err != nil {

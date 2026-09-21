@@ -8,14 +8,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/domain"
 )
 
 // HTTPWriter posts telemetry to the gateway ingest endpoint.
 type HTTPWriter struct {
-	BaseURL    string
-	Client     *http.Client
-	Path       string
+	BaseURL string
+	Client  *http.Client
+	Path    string
 }
 
 func NewHTTPWriter(baseURL string) *HTTPWriter {

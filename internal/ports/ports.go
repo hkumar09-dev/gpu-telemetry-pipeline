@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/domain"
 )
 
 // Publisher sends keyed messages to a topic. The key is used for partition affinity.

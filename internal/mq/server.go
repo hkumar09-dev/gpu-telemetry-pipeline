@@ -55,7 +55,7 @@ func (s *Server) serve(ln net.Listener) error {
 	}
 }
 
-func (s *Server) Close() error {
+func (s *Server) Close(ctx context.Context) error {
 	s.mu.Lock()
 	ln := s.ln
 	s.mu.Unlock()

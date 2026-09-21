@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/domain"
 )
 
 func TestHTTPWriter(t *testing.T) {

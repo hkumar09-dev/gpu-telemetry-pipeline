@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/domain"
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/ports"
+	"github.com/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/ports"
 )
 
 // API documents and serves telemetry query + collector ingest.
@@ -27,7 +27,9 @@ func New(repo ports.Repository, log *slog.Logger) *API {
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.health)
+	mux.HandleFunc("GET /healthz/{$}", a.health)
 	mux.HandleFunc("GET /livez", a.health)
+	mux.HandleFunc("GET /livez/{$}", a.health)
 	mux.HandleFunc("GET /openapi.yaml", a.openapi)
 	mux.HandleFunc("GET /api/openapi.yaml", a.openapi)
 	mux.HandleFunc("GET /api/v1/gpus", a.listGPUs)

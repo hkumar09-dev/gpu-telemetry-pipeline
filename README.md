@@ -91,22 +91,37 @@ Docker Compose:
 docker compose up --build --scale collector=2
 ```
 
-## Kubernetes (Helm)
+## Kubernetes
+
+Minikube (no Helm required):
 
 ```bash
-make docker-build
-# load images into your cluster (kind load docker-image ... / minikube image load ...)
-helm upgrade --install gpu deploy/helm/gpu-telemetry --namespace gpu-telemetry --create-namespace
+minikube start
+make k8s-deploy
 kubectl -n gpu-telemetry port-forward svc/gpu-gateway 8080:8080
+curl -s localhost:8080/healthz
+curl -s localhost:8080/api/v1/gpus | head
 ```
+
+On some minikube drivers the gateway is also reachable as NodePort `30080` (`minikube service gpu-gateway -n gpu-telemetry --url`).
 
 Scale:
 
 ```bash
-helm upgrade gpu deploy/helm/gpu-telemetry --set replicaCount.streamer=4 --set replicaCount.collector=3
+kubectl -n gpu-telemetry scale statefulset gpu-streamer --replicas=4
+kubectl -n gpu-telemetry set env statefulset/gpu-streamer STREAMER_COUNT=4
+kubectl -n gpu-telemetry scale deploy gpu-collector --replicas=3
 ```
 
-Streamers parse the StatefulSet ordinal into `STREAMER_INDEX` so shards stay disjoint. Collectors join the same consumer group with `CONSUMER_ID=pod name`.
+Helm (optional):
+
+```bash
+make docker-build
+minikube image load gpu-telemetry/broker:local gpu-telemetry/streamer:local gpu-telemetry/collector:local gpu-telemetry/gateway:local
+helm upgrade --install gpu deploy/helm/gpu-telemetry --namespace gpu-telemetry --create-namespace
+```
+
+Streamers take the StatefulSet ordinal from `POD_NAME` so shards stay disjoint. Collectors join the same consumer group with `CONSUMER_ID=pod name`.
 
 ## Layout
 
@@ -120,7 +135,8 @@ internal/collector   consumer + persist
 internal/gateway     HTTP API
 internal/storage     JSON file / memory / HTTP writer
 data/                full DCGM CSV
-deploy/helm          Kubernetes chart
+deploy/k8s           kubectl/kustomize manifests
+deploy/helm          Kubernetes Helm chart
 ```
 
 ## AI assistance

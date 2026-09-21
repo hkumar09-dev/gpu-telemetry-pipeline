@@ -11,7 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/ports"
+	"github.com/gpu-telemetry-pipeline/constants"
+	"github.com/gpu-telemetry-pipeline/internal/ports"
 )
 
 type op string
@@ -171,8 +172,8 @@ func (c *tcpConsumer) Consume(ctx context.Context, timeout time.Duration) (ports
 		return ports.Delivery{}, err
 	}
 	if resp.Error != "" {
-		if resp.Error == ErrTimeout.Error() {
-			return ports.Delivery{}, ErrTimeout
+		if resp.Error == constants.ErrTimeout.Error() {
+			return ports.Delivery{}, constants.ErrTimeout
 		}
 		return ports.Delivery{}, fmt.Errorf("%s", resp.Error)
 	}

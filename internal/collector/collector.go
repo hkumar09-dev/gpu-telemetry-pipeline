@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/domain"
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/mq"
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/ports"
+	"github.com/gpu-telemetry-pipeline/constants"
+	"github.com/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/ports"
 )
 
 type Config struct {
@@ -41,10 +41,10 @@ func (c *Collector) Run(ctx context.Context) error {
 		}
 		d, err := c.consumer.Consume(ctx, c.cfg.ConsumeTimeout)
 		if err != nil {
-			if errors.Is(err, mq.ErrTimeout) || errors.Is(err, context.Canceled) {
+			if errors.Is(err, constants.ErrTimeout) || errors.Is(err, context.Canceled) {
 				continue
 			}
-			if errors.Is(err, mq.ErrClosed) {
+			if errors.Is(err, constants.ErrClosed) {
 				return nil
 			}
 			c.log.Warn("consume failed", "err", err)

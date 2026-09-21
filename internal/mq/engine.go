@@ -4,18 +4,11 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
-)
 
-var (
-	ErrBackpressure = errors.New("partition at capacity")
-	ErrTimeout      = errors.New("consume timeout")
-	ErrClosed       = errors.New("broker closed")
-	ErrUnknownMsg   = errors.New("unknown delivery")
-	ErrNotOwner     = errors.New("delivery not owned by consumer")
+	"github.com/gpu-telemetry-pipeline/constants"
 )
 
 // Delivery is one in-flight message held until Ack or Nack.
@@ -105,11 +98,11 @@ func (e *Engine) Close() {
 	e.signal()
 }
 
-func (e *Engine) Publish(_ context.Context, topic, key string, payload []byte) error {
+func (e *Engine) Publish(ctx context.Context, topic, key string, payload []byte) error {
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
-		return ErrClosed
+		return constants.ErrClosed
 	}
 	parts := e.ensureTopicLocked(topic)
 	e.mu.Unlock()
@@ -119,7 +112,7 @@ func (e *Engine) Publish(_ context.Context, topic, key string, payload []byte) e
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.pending) >= e.cfg.MaxPerPartition {
-		return ErrBackpressure
+		return constants.ErrBackpressure
 	}
 	cp := append([]byte(nil), payload...)
 	p.pending = append(p.pending, record{offset: p.next, key: key, payload: cp})
@@ -181,7 +174,7 @@ func (e *Engine) Consume(ctx context.Context, topic, group, consumerID string, t
 			return d, nil
 		}
 		if timeout <= 0 || time.Now().After(deadline) {
-			return Delivery{}, ErrTimeout
+			return Delivery{}, constants.ErrTimeout
 		}
 		remaining := time.Until(deadline)
 		timer := time.NewTimer(remaining)
@@ -190,7 +183,7 @@ func (e *Engine) Consume(ctx context.Context, topic, group, consumerID string, t
 			timer.Stop()
 			return Delivery{}, ctx.Err()
 		case <-timer.C:
-			return Delivery{}, ErrTimeout
+			return Delivery{}, constants.ErrTimeout
 		case <-e.wake:
 			timer.Stop()
 		}
@@ -200,16 +193,16 @@ func (e *Engine) Consume(ctx context.Context, topic, group, consumerID string, t
 func (e *Engine) Ack(topic, group, consumerID, id string) error {
 	gs := e.group(topic, group)
 	if gs == nil {
-		return ErrUnknownMsg
+		return constants.ErrUnknownMsg
 	}
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	inf, ok := gs.inflight[id]
 	if !ok {
-		return ErrUnknownMsg
+		return constants.ErrUnknownMsg
 	}
 	if inf.consumer != consumerID {
-		return ErrNotOwner
+		return constants.ErrNotOwner
 	}
 	delete(gs.inflight, id)
 	return nil
@@ -218,17 +211,17 @@ func (e *Engine) Ack(topic, group, consumerID, id string) error {
 func (e *Engine) Nack(topic, group, consumerID, id string) error {
 	gs := e.group(topic, group)
 	if gs == nil {
-		return ErrUnknownMsg
+		return constants.ErrUnknownMsg
 	}
 	gs.mu.Lock()
 	inf, ok := gs.inflight[id]
 	if !ok {
 		gs.mu.Unlock()
-		return ErrUnknownMsg
+		return constants.ErrUnknownMsg
 	}
 	if inf.consumer != consumerID {
 		gs.mu.Unlock()
-		return ErrNotOwner
+		return constants.ErrNotOwner
 	}
 	delete(gs.inflight, id)
 	gs.mu.Unlock()
@@ -376,7 +369,7 @@ func (e *Engine) errIfClosed() error {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.closed {
-		return ErrClosed
+		return constants.ErrClosed
 	}
 	return nil
 }

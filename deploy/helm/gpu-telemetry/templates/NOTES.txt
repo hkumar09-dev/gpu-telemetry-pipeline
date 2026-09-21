@@ -1,0 +1,12 @@
+GPU telemetry pipeline is installed.
+
+  kubectl -n {{ .Release.Namespace }} get pods,svc
+
+Gateway:
+{{- if eq .Values.gateway.service.type "NodePort" }}
+  minikube service {{ .Release.Name }}-gateway -n {{ .Release.Namespace }}
+  curl $(minikube service {{ .Release.Name }}-gateway -n {{ .Release.Namespace }} --url)/healthz
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }}-gateway {{ .Values.gateway.port }}:{{ .Values.gateway.port }}
+  curl -s localhost:{{ .Values.gateway.port }}/healthz
+{{- end }}

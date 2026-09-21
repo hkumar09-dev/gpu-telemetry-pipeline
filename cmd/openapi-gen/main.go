@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/gateway"
+	"github.com/gpu-telemetry-pipeline/internal/gateway"
 )
 
 func main() {

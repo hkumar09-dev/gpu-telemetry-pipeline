@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/domain"
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/mq"
-	"github.com/himanshubh/gpu-telemetry-pipeline/internal/storage"
+	"github.com/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/mq"
+	"github.com/gpu-telemetry-pipeline/internal/storage"
 )
 
 func TestCollectorPersistsAndAcks(t *testing.T) {
