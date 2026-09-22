@@ -10,11 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gpu-telemetry-pipeline/constants"
 	"github.com/gpu-telemetry-pipeline/internal/domain"
 )
-
-const persistInterval = 500 * time.Millisecond
-const maxStoreBytes = 32 << 20
 
 // snapshot is a snapshot of the repository.
 type snapshot struct {
@@ -59,7 +57,7 @@ func (s *File) load() error {
 		}
 		return err
 	}
-	if info.Size() > maxStoreBytes {
+	if info.Size() > constants.MaxStoreBytes {
 		s.log.Warn("store too large, resetting", "path", s.path, "bytes", info.Size())
 		return os.Remove(s.path)
 	}
@@ -112,7 +110,7 @@ func (s *File) Save(ctx context.Context, t domain.Telemetry) error {
 		return err
 	}
 	s.dirty = true
-	if time.Since(s.lastFlush) < persistInterval {
+	if time.Since(s.lastFlush) < constants.PersistInterval {
 		return nil
 	}
 	if err := s.persistLocked(); err != nil {

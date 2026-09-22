@@ -1,12 +1,15 @@
 package csvsource
 
 import (
+	"context"
 	"encoding/csv"
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gpu-telemetry-pipeline/internal/domain"
@@ -20,16 +23,27 @@ type FileSource struct {
 	Path string
 }
 
-func (s FileSource) Load() ([]domain.Telemetry, error) {
+type job struct {
+	line int
+	rec  []string
+}
+
+type result struct {
+	line int
+	t    domain.Telemetry
+	err  error
+}
+
+func (s FileSource) Load(ctx context.Context) ([]domain.Telemetry, error) {
 	f, err := os.Open(s.Path)
 	if err != nil {
 		return nil, fmt.Errorf("open csv: %w", err)
 	}
 	defer f.Close()
-	return Parse(f)
+	return Parse(ctx, f)
 }
 
-func Parse(r io.Reader) ([]domain.Telemetry, error) {
+func Parse(ctx context.Context, r io.Reader) ([]domain.Telemetry, error) {
 	cr := csv.NewReader(r)
 	cr.FieldsPerRecord = -1
 	cr.LazyQuotes = true
@@ -38,33 +52,120 @@ func Parse(r io.Reader) ([]domain.Telemetry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read header: %w", err)
 	}
+
 	if err := validateHeader(header); err != nil {
 		return nil, err
 	}
 
-	var out []domain.Telemetry
-	line := 1
-	for {
-		rec, err := cr.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("csv line %d: %w", line+1, err)
-		}
-		line++
-		if len(rec) < expectedColumns {
-			return nil, fmt.Errorf("csv line %d: expected %d columns, got %d", line, expectedColumns, len(rec))
-		}
-		t, err := rowToTelemetry(rec)
-		if err != nil {
-			return nil, fmt.Errorf("csv line %d: %w", line, err)
-		}
-		out = append(out, t)
+	workers := runtime.NumCPU()
+
+	jobs := make(chan job, workers*2)
+	results := make(chan result, workers*2)
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	// Start worker goroutines.
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+
+				case j, ok := <-jobs:
+					if !ok {
+						return
+					}
+
+					t, err := rowToTelemetry(j.rec)
+
+					select {
+					case results <- result{
+						line: j.line,
+						t:    t,
+						err:  err,
+					}:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}()
 	}
+
+	// Read rows from the CSV file and send them to the worker goroutines.
+	go func() {
+		defer close(jobs)
+		line := 1
+		for {
+			rec, err := cr.Read()
+
+			if err == io.EOF {
+				return
+			}
+			line++
+			if err != nil {
+				select {
+				case results <- result{
+					line: line,
+					err:  fmt.Errorf("csv line %d: %w", line, err),
+				}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			if len(rec) < expectedColumns {
+				select {
+				case results <- result{
+					line: line,
+					err: fmt.Errorf(
+						"csv line %d: expected %d columns, got %d",
+						line,
+						expectedColumns,
+						len(rec),
+					)}:
+				case <-ctx.Done():
+
+					return
+				}
+
+				select {
+				case jobs <- job{line: line, rec: rec}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+
+	// Wait for all worker goroutines to finish.
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results from the worker goroutines.
+	out := make([]domain.Telemetry, 0)
+
+	for result := range results {
+		if result.err != nil {
+			cancel()
+			return nil, result.err
+		}
+
+		out = append(out, result.t)
+	}
+
 	return out, nil
 }
 
+// validateHeader validates the CSV header.
 func validateHeader(header []string) error {
 	want := []string{
 		"timestamp", "metric_name", "gpu_id", "device", "uuid", "modelName",

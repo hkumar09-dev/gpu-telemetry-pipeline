@@ -18,6 +18,7 @@ func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	addr := utils.Getenv("MQ_ADDR", ":9000")
 	engine := mq.NewEngine(mq.Config{MaxRetries: 5, RetryBackoff: 5 * time.Millisecond})
+
 	// Context is cancelled when SIGINT/SIGTERM is received.
 	ctx, stop := signal.NotifyContext(
 		context.Background(),

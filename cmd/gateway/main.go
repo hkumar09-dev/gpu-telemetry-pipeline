@@ -11,23 +11,25 @@ import (
 
 	"github.com/gpu-telemetry-pipeline/internal/api"
 	"github.com/gpu-telemetry-pipeline/internal/storage"
+	"github.com/gpu-telemetry-pipeline/utils"
 )
 
 func main() {
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	db, err := storage.Open(getenv("DB_PATH", "/var/lib/gpu-telemetry/telemetry.json"))
+	db, err := storage.Open(utils.Getenv("DB_PATH", "/var/lib/gpu-telemetry/telemetry.json"))
 	if err != nil {
 		log.Error("open db", "err", err)
 		os.Exit(1)
 	}
+	
 	defer db.Close()
 
 	svc := api.NewService(db, log)
 
 	//api := api.New(db, log)
 	srv := &http.Server{
-		Addr:              getenv("HTTP_ADDR", ":8080"),
+		Addr:              utils.Getenv("HTTP_ADDR", ":8080"),
 		Handler:           api.NewHandler(svc),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -48,9 +50,9 @@ func main() {
 	}
 }
 
-func getenv(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
-}
+//func getenv(k, def string) string {
+//	if v := os.Getenv(k); v != "" {
+//		return v
+//	}
+//	return def
+//}

@@ -37,7 +37,7 @@ type ConsumerFactory interface {
 
 // TelemetrySource yields CSV records that streamers shard and replay.
 type TelemetrySource interface {
-	Load() ([]domain.Telemetry, error)
+	Load(ctx context.Context) ([]domain.Telemetry, error)
 }
 
 // Repository persists parsed telemetry for the query API.

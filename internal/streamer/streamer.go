@@ -57,13 +57,13 @@ func New(src ports.TelemetrySource, pub ports.Publisher, clk clock.Clock, cfg Co
 	if cfg.Interval <= 0 {
 		cfg.Interval = 10 * time.Millisecond
 	}
-	
+
 	return &Streamer{src: src, pub: pub, clock: clk, cfg: cfg, log: log}
 }
 
 // Run starts the streamer.
 func (s *Streamer) Run(ctx context.Context) error {
-	rows, err := s.src.Load()
+	rows, err := s.src.Load(ctx)
 	if err != nil {
 		s.log.Error("load telemetry failed", "err", err)
 		return fmt.Errorf("load telemetry: %w", err)

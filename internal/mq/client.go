@@ -107,13 +107,16 @@ func (c *Client) Publish(ctx context.Context, topic, key string, payload []byte)
 	if err := writeFrame(conn, frame{Op: opPublish, Topic: topic, Key: key, Payload: payload}); err != nil {
 		return err
 	}
+
 	resp, err := readFrame(br)
 	if err != nil {
 		return err
 	}
+
 	if resp.Error != "" {
 		return fmt.Errorf("%s", resp.Error)
 	}
+
 	return nil
 }
 
@@ -228,7 +231,7 @@ func (c *tcpConsumer) ctrl(ctx context.Context, o op, id string) error {
 	if resp.Error != "" {
 		return fmt.Errorf("%s", resp.Error)
 	}
-	
+
 	return nil
 }
 

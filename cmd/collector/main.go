@@ -26,11 +26,13 @@ func main() {
 		log.Error("subscribe failed", "err", err)
 		os.Exit(1)
 	}
+
 	defer cons.Close()
 
 	c := collector.New(cons, storage.NewHTTPWriter(getenv("GATEWAY_URL", "http://127.0.0.1:8080")), collector.Config{
 		ConsumeTimeout: 2 * time.Second,
 	}, log)
+
 	if err := c.Run(ctx); err != nil && ctx.Err() == nil {
 		log.Error("collector failed", "err", err)
 		os.Exit(1)
