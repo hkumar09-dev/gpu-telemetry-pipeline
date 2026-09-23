@@ -1,3 +1,7 @@
+# How to test:
+
+open terminal, go to repo and  execute  make helm-deploy and make forward then see open.yaml file and use curl 
+
 # Elastic GPU Telemetry Pipeline
 
 Custom message-queue pipeline for DCGM GPU metrics: CSV streamers publish into a purpose-built broker, collectors persist datapoints, and an API gateway serves them.
@@ -56,14 +60,20 @@ deploy/k8s           static manifests
 docs/                AI assistance log
 ```
 
+
+
 ## 3. Component responsibilities
 
-| Process | Role |
-| --- | --- |
-| **broker** | In-process partitioned topic engine on TCP `:9000`. Same GPU UUID always hashes to the same partition (ordering). Consumer groups rebalance partitions across collectors. Bounded partitions apply backpressure. Unacked messages retry, then land on `{topic}.dlq`. |
-| **streamer** | Loads `data/dcgm_metrics.csv`, takes every `Count`th row (`Index`), stamps `processed_at` with **emit time** (not the CSV timestamp), optionally loops the file. Scale by changing StatefulSet replicas. |
-| **collector** | Competing consumer in group `collectors`. Parses JSON, validates, writes via HTTP to the gateway. Invalid payloads are nacked. |
-| **gateway** | JSON-file repository, public REST API on `:8080`, and internal ingest. Serves generated OpenAPI at `/openapi.yaml`. One replica + PVC is the system of record. |
+
+| Process       | Role                                                                                                                                                                                                                                                                 |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **broker**    | In-process partitioned topic engine on TCP `:9000`. Same GPU UUID always hashes to the same partition (ordering). Consumer groups rebalance partitions across collectors. Bounded partitions apply backpressure. Unacked messages retry, then land on `{topic}.dlq`. |
+| **streamer**  | Loads `data/dcgm_metrics.csv`, takes every `Count`th row (`Index`), stamps `processed_at` with **emit time** (not the CSV timestamp), optionally loops the file. Scale by changing StatefulSet replicas.                                                             |
+| **collector** | Competing consumer in group `collectors`. Parses JSON, validates, writes via HTTP to the gateway. Invalid payloads are nacked.                                                                                                                                       |
+| **gateway**   | JSON-file repository, public REST API on `:8080`, and internal ingest. Serves generated OpenAPI at `/openapi.yaml`. One replica + PVC is the system of record.                                                                                                       |
+
+
+
 
 ## 4. Custom MQ design
 
@@ -75,6 +85,8 @@ The broker is `internal/mq`: an `Engine` plus a TCP `Server`/`Client`.
 - **Consumer groups** (default `collectors`) assign partitions round-robin across members. Subscribe/unsubscribe rebalances.
 - Protocol: 4-byte big-endian length prefix, then a JSON frame (`publish`, `subscribe`, `unsubscribe`, `consume`, `ack`, `nack`, `response`). Max frame 16 MiB.
 - The engine can also be used in-process (tests) through `EnginePublisher` / `EngineConsumer` without TCP.
+
+
 
 ## 5. Message delivery semantics
 
@@ -88,15 +100,19 @@ Delivery is **at-least-once** with explicit ack:
 6. After `MaxRetries` (broker default **5**), the payload is published to `{topic}.dlq` (for example `gpu-telemetry.dlq`).
 7. Duplicate ingest (same UUID + `processed_at` + `metric_name`) is treated as idempotent at the store: the second save is a no-op and still returns HTTP **202**.
 
+
+
 ## 6. Retry strategy
 
-| Layer | What retries | Policy |
-| --- | --- | --- |
-| Broker | Nack and ack-timeout | Linear backoff: `RetryBackoff * attempts` (default 5ms). After 5 attempts → DLQ. If the retry channel is full, message goes to DLQ immediately. |
-| Streamer `retryPublisher` | `Publish` (including `ErrBackpressure`) | Up to 10 attempts, exponential backoff 200ms → 2s cap. |
-| Collector subscribe | TCP subscribe before Run | Retry every 2s until context cancel. |
-| Collector handle | Persist after nack | Extra 1s sleep when the write error looks like connection refused/reset/no such host. |
-| HTTP writer | Gateway ingest | Up to 10 attempts, exponential backoff 200ms → 2s. Retries timeouts, connection errors, HTTP 502/503. Does not retry 4xx. |
+
+| Layer                     | What retries                            | Policy                                                                                                                                          |
+| ------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Broker                    | Nack and ack-timeout                    | Linear backoff: `RetryBackoff * attempts` (default 5ms). After 5 attempts → DLQ. If the retry channel is full, message goes to DLQ immediately. |
+| Streamer `retryPublisher` | `Publish` (including `ErrBackpressure`) | Up to 10 attempts, exponential backoff 200ms → 2s cap.                                                                                          |
+| Collector subscribe       | TCP subscribe before Run                | Retry every 2s until context cancel.                                                                                                            |
+| Collector handle          | Persist after nack                      | Extra 1s sleep when the write error looks like connection refused/reset/no such host.                                                           |
+| HTTP writer               | Gateway ingest                          | Up to 10 attempts, exponential backoff 200ms → 2s. Retries timeouts, connection errors, HTTP 502/503. Does not retry 4xx.                       |
+
 
 Invalid JSON / validation failures are nacked (broker retry/DLQ) and are **not** treated as HTTP-transient.
 
@@ -104,19 +120,21 @@ Invalid JSON / validation failures are nacked (broker retry/DLQ) and are **not**
 
 Operational errors are wrapped (`fmt.Errorf("persist telemetry: %w", err)`) and never panic.
 
-| Case | Behavior |
-| --- | --- |
-| Malformed CSV row | Parser skips the row; unrecoverable I/O still fails the load. |
-| Invalid telemetry | Streamer skips; collector wraps `ErrInvalidPayload` and nacks (broker retry/DLQ). Ingest returns **400**. |
-| Database unavailable | Persist wraps the error. Gateway **503**. Collector retries then nacks. |
-| Database timeout | Persist wraps `context.DeadlineExceeded` / timeout. Gateway **504**. |
-| Queue unavailable | Client wraps dial/closed as `queue unavailable`. Streamer retries then exits. |
-| Queue full | `queue full: %w` (`ErrBackpressure`). Streamer retries with backoff. |
-| Consumer / producer disconnect | Wrapped as `consumer disconnect` / `producer disconnect`. Broker recovers handler panics. |
-| Duplicate message | Idempotent save; ingest **202**. |
-| Invalid API timestamp | `ErrInvalidTime` → **400**. |
-| Unknown GPU | `ErrUnknownGPU` → **404**. Known GPU with no points in the window → **200** `[]`. |
-| Context cancellation | Propagated with `%w`. Processes shut down; in-flight HTTP **503**. |
+
+| Case                           | Behavior                                                                                                  |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| Malformed CSV row              | Parser skips the row; unrecoverable I/O still fails the load.                                             |
+| Invalid telemetry              | Streamer skips; collector wraps `ErrInvalidPayload` and nacks (broker retry/DLQ). Ingest returns **400**. |
+| Database unavailable           | Persist wraps the error. Gateway **503**. Collector retries then nacks.                                   |
+| Database timeout               | Persist wraps `context.DeadlineExceeded` / timeout. Gateway **504**.                                      |
+| Queue unavailable              | Client wraps dial/closed as `queue unavailable`. Streamer retries then exits.                             |
+| Queue full                     | `queue full: %w` (`ErrBackpressure`). Streamer retries with backoff.                                      |
+| Consumer / producer disconnect | Wrapped as `consumer disconnect` / `producer disconnect`. Broker recovers handler panics.                 |
+| Duplicate message              | Idempotent save; ingest **202**.                                                                          |
+| Invalid API timestamp          | `ErrInvalidTime` → **400**.                                                                               |
+| Unknown GPU                    | `ErrUnknownGPU` → **404**. Known GPU with no points in the window → **200** `[]`.                         |
+| Context cancellation           | Propagated with `%w`. Processes shut down; in-flight HTTP **503**.                                        |
+
 
 Also: store file > 32 MiB is reset with a warning; corrupt JSON store fails gateway start. Consume idle timeout is not an error.
 
@@ -130,16 +148,20 @@ Backpressure is **partition-bounded, fail-fast at publish**:
 - Gateway persist is batched: in-memory save plus flush at most every 500ms (`PersistInterval`), so ingest does not fsync every point.
 - Memory/file stores cap retained telemetry records (in-memory max) so the JSON snapshot cannot grow forever.
 
+
+
 ## 9. Scaling strategy
 
 Scale **streamers** and **collectors** independently. Keep **broker = 1** and **gateway = 1**.
 
-| Component | How it scales | Constraint |
-| --- | --- | --- |
-| Streamer | StatefulSet replicas; each pod takes a disjoint CSV shard (`index % count`) | Replicas should stay ≤ 10 for this exercise. `STREAMER_COUNT` must match replica count. |
-| Collector | Deployment replicas in one consumer group | Replicas should stay ≤ 10. More collectors than partitions (8) idle some pods. |
-| Broker | Single process | All partitions live in one engine. HA would need a WAL + election behind `Engine`. |
-| Gateway | Single replica + PVC | Shared JSON file is not multi-writer safe. |
+
+| Component | How it scales                                                               | Constraint                                                                              |
+| --------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Streamer  | StatefulSet replicas; each pod takes a disjoint CSV shard (`index % count`) | Replicas should stay ≤ 10 for this exercise. `STREAMER_COUNT` must match replica count. |
+| Collector | Deployment replicas in one consumer group                                   | Replicas should stay ≤ 10. More collectors than partitions (8) idle some pods.          |
+| Broker    | Single process                                                              | All partitions live in one engine. HA would need a WAL + election behind `Engine`.      |
+| Gateway   | Single replica + PVC                                                        | Shared JSON file is not multi-writer safe.                                              |
+
 
 Helm defaults: 2 streamers, 2 collectors, 8 partitions, gateway ClusterIP 8080.
 
@@ -182,21 +204,25 @@ Persistence is a **JSON snapshot file**, not SQL. Default path: `DB_PATH` (`./tm
 - Path comes from `DATABASE_URL` (or `DB_PATH`). Writes go to `path.tmp` then rename onto `path`.
 - Tests use `internal/storage.Memory` with the same domain types.
 
+
+
 ## 11. API documentation
 
 Base URL: `http://localhost:8080` (see `api/openapi.yaml`).
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/healthz`, `/livez` | Liveness (aliases of `/health`) |
-| `GET` | `/health` | Liveness |
-| `GET` | `/ready` | Readiness (store readable) |
-| `GET` | `/metrics` | Prometheus metrics |
-| `GET` | `/openapi.yaml`, `/api/openapi.yaml` | OpenAPI 3.0.3 spec |
-| `GET` | `/api/v1/gpus` | GPU inventory |
-| `GET` | `/api/v1/gpus/{id}/telemetry` | Time-ordered points for a UUID |
-| `GET` | `/api/v1/gpus/{id}/telemetry?start_time=RFC3339&end_time=RFC3339` | Inclusive window |
-| `POST` | `/internal/v1/telemetry` | Collector ingest (not a public product API) |
+
+| Method | Path                                                              | Purpose                                     |
+| ------ | ----------------------------------------------------------------- | ------------------------------------------- |
+| `GET`  | `/healthz`, `/livez`                                              | Liveness (aliases of `/health`)             |
+| `GET`  | `/health`                                                         | Liveness                                    |
+| `GET`  | `/ready`                                                          | Readiness (store readable)                  |
+| `GET`  | `/metrics`                                                        | Prometheus metrics                          |
+| `GET`  | `/openapi.yaml`, `/api/openapi.yaml`                              | OpenAPI 3.0.3 spec                          |
+| `GET`  | `/api/v1/gpus`                                                    | GPU inventory                               |
+| `GET`  | `/api/v1/gpus/{id}/telemetry`                                     | Time-ordered points for a UUID              |
+| `GET`  | `/api/v1/gpus/{id}/telemetry?start_time=RFC3339&end_time=RFC3339` | Inclusive window                            |
+| `POST` | `/internal/v1/telemetry`                                          | Collector ingest (not a public product API) |
+
 
 `{id}` is the GPU UUID from the CSV `uuid` column. Invalid RFC3339 filters return **400**. Unknown GPU UUID returns **404**. Store unavailable **503**; store timeout **504**.
 
@@ -229,78 +255,94 @@ curl -s localhost:8080/api/v1/gpus | head
 curl -s "localhost:8080/api/v1/gpus/GPU-5fd4f087-86f3-7a43-b711-4771313afc50/telemetry?start_time=2026-01-01T00:00:00Z"
 ```
 
+
+
 ### Environment variables
 
 Every important setting is an environment variable. Empty or invalid values fall back to the development default.
 
 **Logging (all processes)**
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
+
+| Variable    | Default | Description                         |
+| ----------- | ------- | ----------------------------------- |
+| `LOG_LEVEL` | `info`  | `debug`, `info`, `warn`, or `error` |
+
 
 **Broker / MQ**
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `MQ_ADDR` | `:9000` (broker listen), `127.0.0.1:9000` (clients) | TCP bind or broker host:port |
-| `MQ_TOPIC` | `gpu-telemetry` | Publish/consume topic |
-| `MQ_GROUP` | `collectors` | Consumer group |
-| `MQ_PARTITIONS` | `8` | Partition count |
-| `MQ_MAX_QUEUE_SIZE` | `10000` | Max in-memory messages per partition (backpressure) |
-| `MQ_ACK_TIMEOUT` | `30s` | In-flight ack deadline before retry |
-| `MQ_RETRY_LIMIT` | `5` | Attempts before DLQ |
-| `MQ_RETRY_BACKOFF` | `5ms` | Base retry backoff (linear with attempts) |
-| `MQ_RETRY_QUEUE_SIZE` | `1024` | Internal retry channel size |
-| `MQ_SHUTDOWN_TIMEOUT` | `10s` | Broker shutdown budget |
-| `MQ_SUBSCRIBE_RETRY` | `2s` | Collector subscribe retry interval |
+
+| Variable              | Default                                             | Description                                         |
+| --------------------- | --------------------------------------------------- | --------------------------------------------------- |
+| `MQ_ADDR`             | `:9000` (broker listen), `127.0.0.1:9000` (clients) | TCP bind or broker host:port                        |
+| `MQ_TOPIC`            | `gpu-telemetry`                                     | Publish/consume topic                               |
+| `MQ_GROUP`            | `collectors`                                        | Consumer group                                      |
+| `MQ_PARTITIONS`       | `8`                                                 | Partition count                                     |
+| `MQ_MAX_QUEUE_SIZE`   | `10000`                                             | Max in-memory messages per partition (backpressure) |
+| `MQ_ACK_TIMEOUT`      | `30s`                                               | In-flight ack deadline before retry                 |
+| `MQ_RETRY_LIMIT`      | `5`                                                 | Attempts before DLQ                                 |
+| `MQ_RETRY_BACKOFF`    | `5ms`                                               | Base retry backoff (linear with attempts)           |
+| `MQ_RETRY_QUEUE_SIZE` | `1024`                                              | Internal retry channel size                         |
+| `MQ_SHUTDOWN_TIMEOUT` | `10s`                                               | Broker shutdown budget                              |
+| `MQ_SUBSCRIBE_RETRY`  | `2s`                                                | Collector subscribe retry interval                  |
+
 
 **Gateway / HTTP / store**
 
 The store is a JSON file, not SQL. `DATABASE_URL` is the file path (`file://` prefix is stripped). `DB_MAX_OPEN_CONNS` limits concurrent writes; `DB_MAX_IDLE_CONNS` is accepted for ops compatibility (no SQL pool).
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `HTTP_ADDR` | `:8080` | Gateway listen address |
-| `DATABASE_URL` | `./tmp/telemetry.json` | Store path (preferred) |
-| `DB_PATH` | same as `DATABASE_URL` | Alias if `DATABASE_URL` is unset |
-| `DB_MAX_OPEN_CONNS` | `4` | Max concurrent store writes |
-| `DB_MAX_IDLE_CONNS` | `2` | Reserved; JSON store has no idle pool |
-| `DB_MAX_RECORDS` | `20000` | Max telemetry points retained |
-| `HTTP_READ_HEADER_TIMEOUT` | `5s` | HTTP server header timeout |
-| `HTTP_SHUTDOWN_TIMEOUT` | `5s` | Graceful HTTP shutdown |
-| `HTTP_TIMEOUT` | `10s` | Collector → gateway ingest client timeout |
-| `HTTP_MAX_RETRIES` | `10` | Ingest retries |
-| `HTTP_INITIAL_BACKOFF` | `200ms` | Ingest retry backoff (caps at 2s) |
-| `GATEWAY_URL` | `http://127.0.0.1:8080` | Collector ingest base URL |
+
+| Variable                   | Default                 | Description                               |
+| -------------------------- | ----------------------- | ----------------------------------------- |
+| `HTTP_ADDR`                | `:8080`                 | Gateway listen address                    |
+| `DATABASE_URL`             | `./tmp/telemetry.json`  | Store path (preferred)                    |
+| `DB_PATH`                  | same as `DATABASE_URL`  | Alias if `DATABASE_URL` is unset          |
+| `DB_MAX_OPEN_CONNS`        | `4`                     | Max concurrent store writes               |
+| `DB_MAX_IDLE_CONNS`        | `2`                     | Reserved; JSON store has no idle pool     |
+| `DB_MAX_RECORDS`           | `20000`                 | Max telemetry points retained             |
+| `HTTP_READ_HEADER_TIMEOUT` | `5s`                    | HTTP server header timeout                |
+| `HTTP_SHUTDOWN_TIMEOUT`    | `5s`                    | Graceful HTTP shutdown                    |
+| `HTTP_TIMEOUT`             | `10s`                   | Collector → gateway ingest client timeout |
+| `HTTP_MAX_RETRIES`         | `10`                    | Ingest retries                            |
+| `HTTP_INITIAL_BACKOFF`     | `200ms`                 | Ingest retry backoff (caps at 2s)         |
+| `GATEWAY_URL`              | `http://127.0.0.1:8080` | Collector ingest base URL                 |
+
 
 **Streamer**
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `CSV_FILE` | `./data/dcgm_metrics.csv` | CSV path (preferred) |
-| `CSV_PATH` | same as `CSV_FILE` | Alias if `CSV_FILE` is unset |
-| `STREAM_INTERVAL` | `10ms` | Delay between published rows |
-| `STREAM_LOOP` | `true` | Replay CSV when the file ends |
-| `STREAMER_INDEX` | `0` | Shard index |
-| `STREAMER_COUNT` | `1` | Shard modulus (must match replica count) |
-| `POD_NAME` | hostname | Used to derive StatefulSet ordinal if index unset |
-| `PUBLISH_MAX_RETRIES` | `10` | Publish retries on backpressure/errors |
-| `PUBLISH_INITIAL_BACKOFF` | `200ms` | Publish retry backoff (caps at 2s) |
+
+| Variable                  | Default                   | Description                                       |
+| ------------------------- | ------------------------- | ------------------------------------------------- |
+| `CSV_FILE`                | `./data/dcgm_metrics.csv` | CSV path (preferred)                              |
+| `CSV_PATH`                | same as `CSV_FILE`        | Alias if `CSV_FILE` is unset                      |
+| `STREAM_INTERVAL`         | `10ms`                    | Delay between published rows                      |
+| `STREAM_LOOP`             | `true`                    | Replay CSV when the file ends                     |
+| `STREAMER_INDEX`          | `0`                       | Shard index                                       |
+| `STREAMER_COUNT`          | `1`                       | Shard modulus (must match replica count)          |
+| `POD_NAME`                | hostname                  | Used to derive StatefulSet ordinal if index unset |
+| `PUBLISH_MAX_RETRIES`     | `10`                      | Publish retries on backpressure/errors            |
+| `PUBLISH_INITIAL_BACKOFF` | `200ms`                   | Publish retry backoff (caps at 2s)                |
+
 
 **Collector**
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `CONSUMER_ID` | hostname / pod name | Unique member in the consumer group |
-| `CONSUME_TIMEOUT` | `2s` | Idle consume wait |
+
+| Variable          | Default             | Description                         |
+| ----------------- | ------------------- | ----------------------------------- |
+| `CONSUMER_ID`     | hostname / pod name | Unique member in the consumer group |
+| `CONSUME_TIMEOUT` | `2s`                | Idle consume wait                   |
+
 
 **Metrics sidecar (broker, streamer, collector)**
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `METRICS_ADDR` | `:9091` / `:9092` / `:9093` | Bind address for `/metrics`, `/health`, `/ready`. `-` disables. Gateway serves these on `HTTP_ADDR`. |
-| `SHUTDOWN_TIMEOUT` | `10s` | Graceful drain budget (`HTTP_SHUTDOWN_TIMEOUT` / `MQ_SHUTDOWN_TIMEOUT` aliases) |
+
+| Variable           | Default                     | Description                                                                                          |
+| ------------------ | --------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `METRICS_ADDR`     | `:9091` / `:9092` / `:9093` | Bind address for `/metrics`, `/health`, `/ready`. `-` disables. Gateway serves these on `HTTP_ADDR`. |
+| `SHUTDOWN_TIMEOUT` | `10s`                       | Graceful drain budget (`HTTP_SHUTDOWN_TIMEOUT` / `MQ_SHUTDOWN_TIMEOUT` aliases)                      |
+
+
+
 
 ## 13. Docker instructions
 
@@ -340,6 +382,8 @@ Uninstall:
 make helm-delete
 ```
 
+
+
 ## 15. Helm installation
 
 Chart: `deploy/helm/gpu-telemetry`. Release name `gpu`, namespace `gpu-telemetry`.
@@ -362,6 +406,8 @@ Important values (`deploy/helm/gpu-telemetry/values.yaml`):
 - `broker.partitions` (8)
 - `gateway.persistence` (PVC for the JSON store)
 - `topic` / `group`
+
+
 
 ## 16. Scaling Streamers
 
@@ -406,12 +452,14 @@ make test-race     # go test -race ./...
 go test ./... -v
 ```
 
-| Area | What is covered |
-| --- | --- |
-| Queue | Publish/consume, ack/nack, retry and ack-timeout redelivery, backpressure (`ErrBackpressure`), consumer failure, TCP client disconnect, `Server.Shutdown`, concurrent producers/consumers, DLQ |
-| Streamer | CSV parse (including skipped malformed rows), shard + loop, emit `processed_at`, publish failures, context cancel |
-| Collector | JSON parse, `Validate`, persist, nack on invalid payload, retryable persist, idempotent duplicate save |
-| API | List GPUs, telemetry query, `start_time`/`end_time`, invalid timestamps (**400**), unknown GPU (**404**), repository errors (**500**/**503**/**504**), ingest validation |
+
+| Area      | What is covered                                                                                                                                                                                |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Queue     | Publish/consume, ack/nack, retry and ack-timeout redelivery, backpressure (`ErrBackpressure`), consumer failure, TCP client disconnect, `Server.Shutdown`, concurrent producers/consumers, DLQ |
+| Streamer  | CSV parse (including skipped malformed rows), shard + loop, emit `processed_at`, publish failures, context cancel                                                                              |
+| Collector | JSON parse, `Validate`, persist, nack on invalid payload, retryable persist, idempotent duplicate save                                                                                         |
+| API       | List GPUs, telemetry query, `start_time`/`end_time`, invalid timestamps (**400**), unknown GPU (**404**), repository errors (**500**/**503**/**504**), ingest validation                       |
+
 
 `go test -race` is practical on the MQ engine/server (WaitGroup vs Shutdown) and HTTP tests. Process `run()` hooks cover SIGINT/SIGTERM without killing the test binary.
 
@@ -449,6 +497,8 @@ Server URL in the spec is `http://localhost:8080`. Generation does not require `
   - Collector: `collector_records_consumed_total`, `collector_records_persisted_total`, `collector_persistence_failures_total`
   - API: `http_requests_total`, `http_request_duration_seconds`, `http_errors_total`
 
+
+
 ## 22. Graceful shutdown
 
 All four processes trap **SIGINT** and **SIGTERM** with `signal.NotifyContext`. Shutdown uses a timeout (`SHUTDOWN_TIMEOUT`, default 10s; `HTTP_SHUTDOWN_TIMEOUT` / `MQ_SHUTDOWN_TIMEOUT` are aliases). HTTP `Close()` is only a last resort after `Shutdown` hits that deadline.
@@ -464,12 +514,14 @@ Order:
 7. Close the MQ consumer (unsubscribe) and then the broker engine.
 8. Exit 0.
 
-| Process | Shutdown |
-| --- | --- |
-| Gateway | `Stop()` → `http.Server.Shutdown(ctx)` → `db.Close()` |
-| Broker | metrics `Shutdown` → `Server.Shutdown(ctx)` (listener, drain handlers, `Engine.Close`) |
-| Streamer | cancel emit loop (no new publishes) → metrics `Shutdown` |
-| Collector | finish current persist → ack or nack → metrics `Shutdown` → `consumer.Close()` |
+
+| Process   | Shutdown                                                                               |
+| --------- | -------------------------------------------------------------------------------------- |
+| Gateway   | `Stop()` → `http.Server.Shutdown(ctx)` → `db.Close()`                                  |
+| Broker    | metrics `Shutdown` → `Server.Shutdown(ctx)` (listener, drain handlers, `Engine.Close`) |
+| Streamer  | cancel emit loop (no new publishes) → metrics `Shutdown`                               |
+| Collector | finish current persist → ack or nack → metrics `Shutdown` → `consumer.Close()`         |
+
 
 In-flight MQ deliveries that are still unacked when the **engine** closes are dropped (in-memory broker). Collectors nack or leave them for ack-timeout redelivery if persist did not finish.
 
@@ -484,6 +536,8 @@ In-flight MQ deliveries that are still unacked when the **engine** closes are dr
 - No TLS or auth.
 - JSON store is capped (~32 MiB file / in-memory record cap); large historical queries are not the design center.
 
+
+
 ## 24. Future improvements
 
 - Replicated broker (WAL + leader election) behind the existing `Engine` interface.
@@ -493,6 +547,8 @@ In-flight MQ deliveries that are still unacked when the **engine** closes are dr
 - SQL or time-series backend if the JSON snapshot is too small.
 - mTLS between streamer/collector/broker/gateway.
 - Streamer shard assignment for Compose comparable to the StatefulSet ordinal.
+
+
 
 ## 25. AI assistance documentation
 
