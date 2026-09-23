@@ -15,21 +15,29 @@ import (
 
 // Server exposes Engine over a length-prefixed JSON TCP protocol.
 type Server struct {
-	ctx      context.Context
-	engine   *Engine
-	log      *slog.Logger
-	mu       sync.Mutex
-	listener net.Listener
-	conns    map[net.Conn]struct{}
-	wg       sync.WaitGroup
-	stopping atomic.Bool
+	ctx       context.Context
+	engine    *Engine
+	log       *slog.Logger
+	mu        sync.Mutex
+	listener  net.Listener
+	conns     map[net.Conn]struct{}
+	wg        sync.WaitGroup
+	stopping  atomic.Bool
+	serving   bool
+	serveDone chan struct{}
 }
 
 func NewServer(ctx context.Context, engine *Engine, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{ctx: ctx, engine: engine, log: log, conns: make(map[net.Conn]struct{})}
+	return &Server{
+		ctx:       ctx,
+		engine:    engine,
+		log:       log,
+		conns:     make(map[net.Conn]struct{}),
+		serveDone: make(chan struct{}),
+	}
 }
 
 // ListenAndServe starts a broker server.
@@ -39,9 +47,11 @@ func (s *Server) ListenAndServe(addr string) error {
 		s.log.Error("listen failed", "err", err)
 		return err
 	}
+	defer close(s.serveDone)
 
 	s.mu.Lock()
 	s.listener = listener
+	s.serving = true
 	s.mu.Unlock()
 	s.log.Info("broker listening", "addr", listener.Addr().String())
 	return s.serve(listener)
@@ -62,8 +72,15 @@ func (s *Server) serve(ln net.Listener) error {
 			_ = conn.Close()
 			continue
 		}
-		s.track(conn)
+		s.mu.Lock()
+		if s.stopping.Load() {
+			s.mu.Unlock()
+			_ = conn.Close()
+			continue
+		}
+		s.conns[conn] = struct{}{}
 		s.wg.Add(1)
+		s.mu.Unlock()
 		go func(c net.Conn) {
 			defer s.wg.Done()
 			defer s.untrack(c)
@@ -78,6 +95,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 	s.mu.Lock()
 	ln := s.listener
+	serving := s.serving
 	s.mu.Unlock()
 	if ln != nil {
 		if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
@@ -85,25 +103,20 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		}
 	}
 
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		s.engine.Close()
-		return nil
-	case <-ctx.Done():
-		s.forceCloseConns()
+	if serving {
 		select {
-		case <-done:
-		case <-time.After(500 * time.Millisecond):
+		case <-s.serveDone:
+		case <-ctx.Done():
+			s.forceCloseConns()
+			<-s.serveDone
 		}
-		s.engine.Close()
+	}
+	s.wg.Wait()
+	s.engine.Close()
+	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	return nil
 }
 
 // Close is Shutdown with a 5s timeout (tests and fallbacks).
