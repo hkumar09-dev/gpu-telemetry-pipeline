@@ -2,6 +2,8 @@ package api
 
 import (
 	"bytes"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,7 +12,7 @@ import (
 )
 
 func TestHandlerLivezAndIngestErrors(t *testing.T) {
-	h := NewHandler(NewService(storage.NewMemory(), nil))
+	h := NewHandler(NewService(storage.NewMemory(), slog.New(slog.NewTextHandler(io.Discard, nil))))
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/livez", nil))

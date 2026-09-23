@@ -144,7 +144,7 @@ func TestBackpressure(t *testing.T) {
 func TestTCPRoundTrip(t *testing.T) {
 	engine := NewEngine(Config{Partitions: 2})
 	ctx := context.Background()
-	srv := NewServer(ctx, engine, nil)
+	srv := NewServer(ctx, engine, quietLog())
 	go func() { _ = srv.ListenAndServe("127.0.0.1:0") }()
 	deadline := time.Now().Add(2 * time.Second)
 	for srv.Addr() == "" && time.Now().Before(deadline) {

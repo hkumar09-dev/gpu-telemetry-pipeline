@@ -19,6 +19,9 @@ var (
 	background         = context.Background
 	subscribeRetryWait = 2 * time.Second
 	hostnameFn         = os.Hostname
+	newLogger          = func() *slog.Logger {
+		return slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	}
 )
 
 func main() {
@@ -28,7 +31,7 @@ func main() {
 }
 
 func run(parent context.Context) error {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	log := newLogger()
 	ctx, cancel := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -79,7 +82,7 @@ func subscribeWithRetry(ctx context.Context, client *mq.Client, log *slog.Logger
 		if err == nil {
 			return cons, nil
 		}
-		log.Error("subscribe failed, retrying", "err", err)
+		log.Warn("subscribe failed, retrying", "err", err)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

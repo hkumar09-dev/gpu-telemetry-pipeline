@@ -14,6 +14,13 @@ import (
 	"github.com/gpu-telemetry-pipeline/internal/mq"
 )
 
+func useQuietLog(t *testing.T) {
+	t.Helper()
+	old := newLogger
+	newLogger = func() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+	t.Cleanup(func() { newLogger = old })
+}
+
 func TestAtoiAndDuration(t *testing.T) {
 	if atoi("3") != 3 || atoi("x") != 0 {
 		t.Fatal("atoi")
@@ -120,6 +127,7 @@ func TestRetryPublisherCancelDuringBackoff(t *testing.T) {
 }
 
 func TestRunStreamer(t *testing.T) {
+	useQuietLog(t)
 	engine := mq.NewEngine(mq.Config{Partitions: 1})
 	t.Cleanup(engine.Close)
 	srv := mq.NewServer(context.Background(), engine, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -145,6 +153,7 @@ func TestRunStreamer(t *testing.T) {
 }
 
 func TestRunStreamerLoadError(t *testing.T) {
+	useQuietLog(t)
 	t.Setenv("CSV_PATH", filepath.Join(t.TempDir(), "missing.csv"))
 	t.Setenv("STREAM_LOOP", "false")
 	t.Setenv("MQ_ADDR", "127.0.0.1:1")
@@ -173,6 +182,7 @@ func (delayFail) Publish(ctx context.Context, topic, key string, payload []byte)
 }
 
 func TestMainExitOnError(t *testing.T) {
+	useQuietLog(t)
 	code := -1
 	osExit = func(c int) { code = c }
 	t.Cleanup(func() { osExit = os.Exit })
@@ -185,6 +195,7 @@ func TestMainExitOnError(t *testing.T) {
 }
 
 func TestMainSuccess(t *testing.T) {
+	useQuietLog(t)
 	engine := mq.NewEngine(mq.Config{Partitions: 1})
 	t.Cleanup(engine.Close)
 	srv := mq.NewServer(context.Background(), engine, slog.New(slog.NewTextHandler(io.Discard, nil)))

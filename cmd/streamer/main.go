@@ -23,6 +23,9 @@ var (
 	maxPublishAttempts    = constants.MAX_RETRY_ATTEMPTS
 	osExit                = os.Exit
 	initialPublishBackoff = constants.INITIAL_BACKOFF
+	newLogger             = func() *slog.Logger {
+		return slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	}
 )
 
 func main() {
@@ -32,7 +35,7 @@ func main() {
 }
 
 func run(parent context.Context) error {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	log := newLogger()
 	ctx, cancel := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 

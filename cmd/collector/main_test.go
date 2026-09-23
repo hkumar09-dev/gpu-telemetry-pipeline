@@ -14,6 +14,13 @@ import (
 	"github.com/gpu-telemetry-pipeline/internal/mq"
 )
 
+func useQuietLog(t *testing.T) {
+	t.Helper()
+	old := newLogger
+	newLogger = func() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+	t.Cleanup(func() { newLogger = old })
+}
+
 func startTestBroker(t *testing.T) string {
 	t.Helper()
 	engine := mq.NewEngine(mq.Config{Partitions: 1})
@@ -91,6 +98,7 @@ func TestSubscribeWithRetrySuccess(t *testing.T) {
 }
 
 func TestRunCollector(t *testing.T) {
+	useQuietLog(t)
 	addr := startTestBroker(t)
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
@@ -117,8 +125,12 @@ func TestRunCollector(t *testing.T) {
 }
 
 func TestRunCollectorSubscribeFail(t *testing.T) {
-	t.Setenv("MQ_ADDR", "127.0.0.1:1")
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	useQuietLog(t)
+	oldWait := subscribeRetryWait
+	subscribeRetryWait = time.Hour
+	t.Cleanup(func() { subscribeRetryWait = oldWait })
+	t.Setenv("MQ_ADDR", "127.0.0.1:9")
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if err := run(ctx); err == nil {
 		t.Fatal("expected subscribe error")
@@ -126,8 +138,9 @@ func TestRunCollectorSubscribeFail(t *testing.T) {
 }
 
 func TestMainExitOnSubscribeFail(t *testing.T) {
+	useQuietLog(t)
 	oldWait := subscribeRetryWait
-	subscribeRetryWait = time.Millisecond
+	subscribeRetryWait = time.Hour
 	t.Cleanup(func() {
 		subscribeRetryWait = oldWait
 		osExit = os.Exit
@@ -135,8 +148,8 @@ func TestMainExitOnSubscribeFail(t *testing.T) {
 	})
 	code := -1
 	osExit = func(c int) { code = c }
-	t.Setenv("MQ_ADDR", "127.0.0.1:1")
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	t.Setenv("MQ_ADDR", "127.0.0.1:9")
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	background = func() context.Context { return ctx }
 	main()
@@ -146,6 +159,7 @@ func TestMainExitOnSubscribeFail(t *testing.T) {
 }
 
 func TestMainShutdown(t *testing.T) {
+	useQuietLog(t)
 	addr := startTestBroker(t)
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)

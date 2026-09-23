@@ -25,11 +25,17 @@ func TestGenerateDefaultAndCustomPath(t *testing.T) {
 
 func TestGenerateDefaultPath(t *testing.T) {
 	dir := t.TempDir()
-	t.Chdir(dir)
-	if err := os.MkdirAll("api", 0o755); err != nil {
+	path := filepath.Join(dir, "api", "openapi.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	old := defaultSpecPath
+	defaultSpecPath = path
+	t.Cleanup(func() { defaultSpecPath = old })
 	if err := generate([]string{"openapi-gen"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
 		t.Fatal(err)
 	}
 }

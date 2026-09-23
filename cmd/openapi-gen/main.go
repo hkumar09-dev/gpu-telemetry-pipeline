@@ -6,7 +6,10 @@ import (
 	"github.com/gpu-telemetry-pipeline/internal/api"
 )
 
-var osExit = os.Exit
+var (
+	osExit          = os.Exit
+	defaultSpecPath = "api/openapi.yaml"
+)
 
 func main() {
 	if err := generate(os.Args); err != nil {
@@ -15,7 +18,7 @@ func main() {
 }
 
 func generate(args []string) error {
-	path := "api/openapi.yaml"
+	path := defaultSpecPath
 	if len(args) > 1 {
 		path = args[1]
 	}

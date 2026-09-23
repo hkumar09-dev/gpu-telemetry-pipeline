@@ -5,10 +5,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
+	"log/slog"
 	"net"
 	"testing"
 	"time"
 )
+
+func quietLog() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 func waitAddr(t *testing.T, srv *Server) string {
 	t.Helper()
@@ -25,7 +31,7 @@ func waitAddr(t *testing.T, srv *Server) string {
 func TestServerUnknownOp(t *testing.T) {
 	engine := NewEngine(Config{Partitions: 1})
 	ctx := context.Background()
-	srv := NewServer(ctx, engine, nil)
+	srv := NewServer(ctx, engine, quietLog())
 	go func() { _ = srv.ListenAndServe("127.0.0.1:0") }()
 	addr := waitAddr(t, srv)
 	t.Cleanup(func() { _ = srv.Close() })
@@ -50,7 +56,7 @@ func TestServerUnknownOp(t *testing.T) {
 func TestServerPublishSubscribeAck(t *testing.T) {
 	engine := NewEngine(Config{Partitions: 1})
 	ctx := context.Background()
-	srv := NewServer(ctx, engine, nil)
+	srv := NewServer(ctx, engine, quietLog())
 	go func() { _ = srv.ListenAndServe("127.0.0.1:0") }()
 	addr := waitAddr(t, srv)
 	t.Cleanup(func() { _ = srv.Close() })
@@ -79,13 +85,13 @@ func TestServerPublishSubscribeAck(t *testing.T) {
 func TestServerListenErrorAndUnknownFrameSize(t *testing.T) {
 	engine := NewEngine(Config{Partitions: 1})
 	t.Cleanup(engine.Close)
-	srv := NewServer(context.Background(), engine, nil)
-	if err := srv.ListenAndServe("127.0.0.1:1"); err == nil {
+	srv := NewServer(context.Background(), engine, quietLog())
+	if err := srv.ListenAndServe("127.0.0.1:999999"); err == nil {
 		t.Fatal("expected listen error")
 	}
 
 	ctx := context.Background()
-	good := NewServer(ctx, engine, nil)
+	good := NewServer(ctx, engine, quietLog())
 	go func() { _ = good.ListenAndServe("127.0.0.1:0") }()
 	addr := waitAddr(t, good)
 	t.Cleanup(func() { _ = good.Close() })
@@ -112,7 +118,7 @@ func TestServerListenErrorAndUnknownFrameSize(t *testing.T) {
 
 func TestServerCloseWithoutListen(t *testing.T) {
 	engine := NewEngine(Config{})
-	srv := NewServer(context.Background(), engine, nil)
+	srv := NewServer(context.Background(), engine, quietLog())
 	if err := srv.Close(); err != nil {
 		t.Fatal(err)
 	}

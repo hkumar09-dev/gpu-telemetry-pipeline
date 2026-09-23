@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,11 +16,15 @@ import (
 	"github.com/gpu-telemetry-pipeline/internal/storage"
 )
 
+func quietLog() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 var errBoom = errors.New("boom")
 
 func TestListAndQuery(t *testing.T) {
 	repo := storage.NewMemory()
-	h := NewHandler(NewService(repo, nil))
+	h := NewHandler(NewService(repo, quietLog()))
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
@@ -71,7 +77,7 @@ func TestListAndQuery(t *testing.T) {
 }
 
 func TestBadTimeFilter(t *testing.T) {
-	h := NewHandler(NewService(storage.NewMemory(), nil))
+	h := NewHandler(NewService(storage.NewMemory(), quietLog()))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/gpus/x/telemetry?start_time=not-a-date", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -81,7 +87,7 @@ func TestBadTimeFilter(t *testing.T) {
 }
 
 func TestHealthAndOpenAPI(t *testing.T) {
-	h := NewHandler(NewService(storage.NewMemory(), nil))
+	h := NewHandler(NewService(storage.NewMemory(), quietLog()))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if rec.Code != 200 {
@@ -120,28 +126,28 @@ func (e errRepo) QueryByGPU(context.Context, string, domain.TimeWindow) ([]domai
 }
 
 func TestServiceErrorPaths(t *testing.T) {
-	h := NewHandler(NewService(errRepo{list: errBoom, gpus: nil}, nil))
+	h := NewHandler(NewService(errRepo{list: errBoom, gpus: nil}, quietLog()))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("list %d", rec.Code)
 	}
 
-	h = NewHandler(NewService(errRepo{}, nil))
+	h = NewHandler(NewService(errRepo{}, quietLog()))
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("empty list %d", rec.Code)
 	}
 
-	h = NewHandler(NewService(errRepo{query: errBoom}, nil))
+	h = NewHandler(NewService(errRepo{query: errBoom}, quietLog()))
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus/x/telemetry", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("query %d", rec.Code)
 	}
 
-	h = NewHandler(NewService(errRepo{save: errBoom}, nil))
+	h = NewHandler(NewService(errRepo{save: errBoom}, quietLog()))
 	body := []byte(`{"processed_at":"2026-01-01T00:00:00Z","metric_name":"m","uuid":"g"}`)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/internal/v1/telemetry", bytes.NewReader(body)))
@@ -150,6 +156,7 @@ func TestServiceErrorPaths(t *testing.T) {
 	}
 
 	svc := NewService(storage.NewMemory(), nil)
+	svc.log = quietLog()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/gpus/x/telemetry", nil)
 	req.SetPathValue("id", "  ")
 	rec = httptest.NewRecorder()
@@ -158,7 +165,7 @@ func TestServiceErrorPaths(t *testing.T) {
 		t.Fatalf("empty id %d", rec.Code)
 	}
 
-	h = NewHandler(NewService(storage.NewMemory(), nil))
+	h = NewHandler(NewService(storage.NewMemory(), quietLog()))
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus/x/telemetry?end_time=nope", nil))
 	if rec.Code != http.StatusBadRequest {

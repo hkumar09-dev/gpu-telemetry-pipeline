@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -14,6 +16,10 @@ import (
 	"github.com/gpu-telemetry-pipeline/internal/storage"
 )
 
+func quietLog() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 func TestCollectorPersistsAndAcks(t *testing.T) {
 	engine := mq.NewEngine(mq.Config{Partitions: 2})
 	t.Cleanup(engine.Close)
@@ -21,7 +27,7 @@ func TestCollectorPersistsAndAcks(t *testing.T) {
 	engine.Subscribe("gpu-telemetry", "collectors", "c1")
 	cons := mq.EngineConsumer{Engine: engine, Topic: "gpu-telemetry", Group: "collectors", ConsumerID: "c1"}
 	repo := storage.NewMemory()
-	c := New(cons, repo, Config{ConsumeTimeout: 50 * time.Millisecond}, nil)
+	c := New(cons, repo, Config{ConsumeTimeout: 50 * time.Millisecond}, quietLog())
 
 	ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	body, _ := json.Marshal(domain.Telemetry{
@@ -61,7 +67,7 @@ func TestCollectorErrClosedAndAckFail(t *testing.T) {
 	engine := mq.NewEngine(mq.Config{Partitions: 1})
 	engine.Subscribe("t", "g", "c1")
 	cons := mq.EngineConsumer{Engine: engine, Topic: "t", Group: "g", ConsumerID: "c1"}
-	c := New(cons, storage.NewMemory(), Config{ConsumeTimeout: 20 * time.Millisecond}, nil)
+	c := New(cons, storage.NewMemory(), Config{ConsumeTimeout: 20 * time.Millisecond}, quietLog())
 	engine.Close()
 	if err := c.Run(context.Background()); err != nil {
 		t.Fatalf("closed should return nil, got %v", err)
@@ -108,7 +114,7 @@ func TestCollectorHandlePaths(t *testing.T) {
 		ack:  fmt.Errorf("ack fail"),
 		nack: nil,
 	}
-	c := New(cons, stubWriter{}, Config{ConsumeTimeout: time.Millisecond}, nil)
+	c := New(cons, stubWriter{}, Config{ConsumeTimeout: time.Millisecond}, quietLog())
 	if err := c.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +134,7 @@ func TestCollectorRetryableWriteCancel(t *testing.T) {
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c := New(cons, stubWriter{err: fmt.Errorf("dial tcp: connection refused")}, Config{ConsumeTimeout: time.Millisecond}, nil)
+	c := New(cons, stubWriter{err: fmt.Errorf("dial tcp: connection refused")}, Config{ConsumeTimeout: time.Millisecond}, quietLog())
 	go func() {
 		time.Sleep(20 * time.Millisecond)
 		cancel()
@@ -150,7 +156,7 @@ func TestCollectorInvalidTelemetry(t *testing.T) {
 			return ports.Delivery{}, constants.ErrClosed
 		},
 	}
-	c := New(cons, stubWriter{}, Config{}, nil)
+	c := New(cons, stubWriter{}, Config{}, quietLog())
 	if err := c.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +183,7 @@ func TestCollectorNacksInvalidJSON(t *testing.T) {
 	engine.Subscribe("t", "g", "c1")
 	cons := mq.EngineConsumer{Engine: engine, Topic: "t", Group: "g", ConsumerID: "c1"}
 	repo := storage.NewMemory()
-	c := New(cons, repo, Config{ConsumeTimeout: 30 * time.Millisecond}, nil)
+	c := New(cons, repo, Config{ConsumeTimeout: 30 * time.Millisecond}, quietLog())
 
 	ctx := context.Background()
 	_ = engine.Publish(ctx, "t", "k", []byte("not-json"))

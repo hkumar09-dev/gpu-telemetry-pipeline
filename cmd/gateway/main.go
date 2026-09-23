@@ -17,6 +17,9 @@ import (
 var (
 	osExit     = os.Exit
 	background = context.Background
+	newLogger  = func() *slog.Logger {
+		return slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	}
 )
 
 func main() {
@@ -26,7 +29,7 @@ func main() {
 }
 
 func run(parent context.Context) error {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	log := newLogger()
 	db, err := storage.Open(utils.Getenv("DB_PATH", "/var/lib/gpu-telemetry/telemetry.json"))
 	if err != nil {
 		log.Error("open db", "err", err)

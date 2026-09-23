@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -9,6 +11,13 @@ import (
 	"testing"
 	"time"
 )
+
+func useQuietLog(t *testing.T) {
+	t.Helper()
+	old := newLogger
+	newLogger = func() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+	t.Cleanup(func() { newLogger = old })
+}
 
 func freeAddr(t *testing.T) string {
 	t.Helper()
@@ -39,6 +48,7 @@ func waitHealth(t *testing.T, addr string) {
 }
 
 func TestRunGatewayShutdown(t *testing.T) {
+	useQuietLog(t)
 	addr := freeAddr(t)
 	t.Setenv("HTTP_ADDR", addr)
 	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "telemetry.json"))
@@ -58,6 +68,7 @@ func TestRunGatewayShutdown(t *testing.T) {
 }
 
 func TestRunGatewayOpenDBError(t *testing.T) {
+	useQuietLog(t)
 	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "blocked"))
 	if err := os.WriteFile(os.Getenv("DB_PATH"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
@@ -69,7 +80,8 @@ func TestRunGatewayOpenDBError(t *testing.T) {
 }
 
 func TestRunGatewayListenError(t *testing.T) {
-	t.Setenv("HTTP_ADDR", "127.0.0.1:1")
+	useQuietLog(t)
+	t.Setenv("HTTP_ADDR", "127.0.0.1:999999")
 	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "telemetry.json"))
 	if err := run(context.Background()); err == nil {
 		t.Fatal("expected listen error")
@@ -77,10 +89,11 @@ func TestRunGatewayListenError(t *testing.T) {
 }
 
 func TestMainExitOnError(t *testing.T) {
+	useQuietLog(t)
 	code := -1
 	osExit = func(c int) { code = c }
 	t.Cleanup(func() { osExit = os.Exit })
-	t.Setenv("HTTP_ADDR", "127.0.0.1:1")
+	t.Setenv("HTTP_ADDR", "127.0.0.1:999999")
 	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "telemetry.json"))
 	main()
 	if code != 1 {
@@ -89,6 +102,7 @@ func TestMainExitOnError(t *testing.T) {
 }
 
 func TestMainSignalShutdown(t *testing.T) {
+	useQuietLog(t)
 	addr := freeAddr(t)
 	t.Setenv("HTTP_ADDR", addr)
 	t.Setenv("DB_PATH", filepath.Join(t.TempDir(), "telemetry.json"))

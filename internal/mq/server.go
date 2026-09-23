@@ -47,11 +47,11 @@ func (s *Server) serve(ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			s.log.Error("accept failed", "err", err)
 			if errors.Is(err, net.ErrClosed) {
 				s.log.Info("broker closed")
 				return nil
 			}
+			s.log.Error("accept failed", "err", err)
 			return err
 		}
 		s.wg.Add(1)

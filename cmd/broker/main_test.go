@@ -2,11 +2,24 @@ package main
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"net"
 	"os"
 	"testing"
 	"time"
 )
+
+func quietLog() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func useQuietLog(t *testing.T) {
+	t.Helper()
+	old := newLogger
+	newLogger = quietLog
+	t.Cleanup(func() { newLogger = old })
+}
 
 func freeAddr(t *testing.T) string {
 	t.Helper()
@@ -20,6 +33,7 @@ func freeAddr(t *testing.T) string {
 }
 
 func TestRunBrokerShutdown(t *testing.T) {
+	useQuietLog(t)
 	addr := freeAddr(t)
 	t.Setenv("MQ_ADDR", addr)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -47,7 +61,8 @@ func TestRunBrokerShutdown(t *testing.T) {
 }
 
 func TestRunBrokerListenError(t *testing.T) {
-	t.Setenv("MQ_ADDR", "127.0.0.1:1")
+	useQuietLog(t)
+	t.Setenv("MQ_ADDR", "127.0.0.1:999999")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := run(ctx); err == nil {
@@ -56,10 +71,11 @@ func TestRunBrokerListenError(t *testing.T) {
 }
 
 func TestMainExitOnError(t *testing.T) {
+	useQuietLog(t)
 	code := -1
 	osExit = func(c int) { code = c }
 	t.Cleanup(func() { osExit = os.Exit })
-	t.Setenv("MQ_ADDR", "127.0.0.1:1")
+	t.Setenv("MQ_ADDR", "127.0.0.1:999999")
 	main()
 	if code != 1 {
 		t.Fatalf("exit code %d", code)
@@ -67,6 +83,7 @@ func TestMainExitOnError(t *testing.T) {
 }
 
 func TestMainSignalShutdown(t *testing.T) {
+	useQuietLog(t)
 	addr := freeAddr(t)
 	t.Setenv("MQ_ADDR", addr)
 	osExit = func(int) { t.Error("os.Exit should not be called") }

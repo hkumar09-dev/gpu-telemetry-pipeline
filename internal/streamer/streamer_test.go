@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +13,10 @@ import (
 	"github.com/gpu-telemetry-pipeline/internal/clock"
 	"github.com/gpu-telemetry-pipeline/internal/domain"
 )
+
+func quietLog() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 type stubSource struct{ rows []domain.Telemetry }
 
@@ -49,7 +55,7 @@ func TestStreamerShardsAndStamps(t *testing.T) {
 		Count:    2,
 		Interval: time.Millisecond,
 		Loop:     false,
-	}, nil)
+	}, quietLog())
 	if err := s.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +81,7 @@ func TestStreamerShardsAndStamps(t *testing.T) {
 
 func TestStreamerLoadErrorInvalidLoopAndPublish(t *testing.T) {
 	src := errSource{err: fmt.Errorf("no csv")}
-	s := New(src, &capturePub{}, clock.SystemClock{}, Config{Topic: "t"}, nil)
+	s := New(src, &capturePub{}, clock.SystemClock{}, Config{Topic: "t"}, quietLog())
 	if err := s.Run(context.Background()); err == nil {
 		t.Fatal("expected load error")
 	}
@@ -87,14 +93,14 @@ func TestStreamerLoadErrorInvalidLoopAndPublish(t *testing.T) {
 	pub := &failPub{}
 	s = New(stubSource{rows}, pub, clock.FixedClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, Config{
 		Topic: "t", Interval: time.Millisecond, Loop: true, MaxIterations: 1,
-	}, nil)
+	}, quietLog())
 	if err := s.Run(context.Background()); err == nil {
 		t.Fatal("expected publish error")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	s = New(stubSource{rows: []domain.Telemetry{{UUID: "g", MetricName: "m", GPUIndex: "0"}}}, &capturePub{}, clock.FixedClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, Config{Interval: time.Hour}, nil)
+	s = New(stubSource{rows: []domain.Telemetry{{UUID: "g", MetricName: "m", GPUIndex: "0"}}}, &capturePub{}, clock.FixedClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, Config{Interval: time.Hour}, quietLog())
 	if err := s.Run(ctx); err == nil {
 		t.Fatal("expected cancel")
 	}
@@ -110,6 +116,7 @@ func (failPub) Publish(context.Context, string, string, []byte) error { return f
 
 func TestStreamerDefaultsAndCancelDuringInterval(t *testing.T) {
 	s := New(stubSource{}, &capturePub{}, nil, Config{Index: -1}, nil)
+	s.log = quietLog()
 	if s.cfg.Count != 1 || s.cfg.Index != 0 || s.cfg.Topic != "gpu-telemetry" {
 		t.Fatalf("%+v", s.cfg)
 	}
@@ -119,7 +126,7 @@ func TestStreamerDefaultsAndCancelDuringInterval(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pub := &cancelPub{cancel: cancel}
-	s = New(stubSource{rows: []domain.Telemetry{{UUID: "g", MetricName: "m", GPUIndex: "0"}}}, pub, clock.FixedClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, Config{Interval: time.Hour}, nil)
+	s = New(stubSource{rows: []domain.Telemetry{{UUID: "g", MetricName: "m", GPUIndex: "0"}}}, pub, clock.FixedClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, Config{Interval: time.Hour}, quietLog())
 	if err := s.Run(ctx); err == nil {
 		t.Fatal("expected cancel during interval")
 	}
@@ -131,4 +138,3 @@ func (c *cancelPub) Publish(context.Context, string, string, []byte) error {
 	c.cancel()
 	return nil
 }
-
