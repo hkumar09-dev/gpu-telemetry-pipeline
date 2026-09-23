@@ -50,23 +50,26 @@ docker-build:
 
 helm-deploy: docker-build
 	@set -e; \
-	ctx="$$(kubectl config current-context)"; \
-	echo "Kubernetes context: $$ctx"; \
-	echo "Loading images..."; \
-	if [ "$$ctx" = "minikube" ]; then \
-		for image in $(IMAGES); do \
-			minikube image load "$$image"; \
-		done; \
-	elif echo "$$ctx" | grep -q '^kind-'; then \
-		kind load docker-image --name "$${ctx#kind-}" $(IMAGES); \
+	CLUSTER_NAME="gpu-telemetry"; \
+	\
+	if ! kind get clusters 2>/dev/null | grep -qx "$$CLUSTER_NAME"; then \
+		echo "Creating Kind cluster: $$CLUSTER_NAME"; \
+		kind create cluster --name "$$CLUSTER_NAME"; \
 	else \
-		echo "Using current cluster $$ctx (not loading local images)"; \
+		echo "Kind cluster already exists: $$CLUSTER_NAME"; \
 	fi; \
+	\
+	kubectl config use-context "kind-$$CLUSTER_NAME"; \
+	echo "Loading images into Kind..."; \
+	kind load docker-image --name "$$CLUSTER_NAME" $(IMAGES); \
+	\
+	echo "Deploying $(RELEASE_NAME)..."; \
 	helm upgrade --install $(RELEASE_NAME) $(CHART) \
 		--namespace $(NAMESPACE) \
 		--create-namespace \
 		--wait \
 		--timeout 3m; \
+	\
 	kubectl -n $(NAMESPACE) get pods,svc
 
 helm-delete:
