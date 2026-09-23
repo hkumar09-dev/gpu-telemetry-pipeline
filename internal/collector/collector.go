@@ -10,6 +10,7 @@ import (
 
 	"github.com/gpu-telemetry-pipeline/constants"
 	"github.com/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/metrics"
 	"github.com/gpu-telemetry-pipeline/internal/ports"
 )
 
@@ -38,34 +39,40 @@ func New(consumer ports.Consumer, writer ports.Writer, cfg Config, log *slog.Log
 func (c *Collector) Run(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			c.log.Info("collector shutting down")
+			return nil
 		}
 		d, err := c.consumer.Consume(ctx, c.cfg.ConsumeTimeout)
 		if err != nil {
-			if errors.Is(err, constants.ErrTimeout) || errors.Is(err, context.Canceled) {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				c.log.Info("collector shutting down")
+				return nil
+			}
+			if errors.Is(err, constants.ErrTimeout) {
 				continue
 			}
 			if errors.Is(err, constants.ErrClosed) {
 				return nil
 			}
 			c.log.Warn("consume failed", "err", err)
+			metrics.MQConsumerFailures.Inc()
 			continue
 		}
+		metrics.CollectorConsumed.Inc()
 		if err := c.handle(ctx, d); err != nil {
 			c.log.Warn("handle delivery", "id", d.ID, "err", err)
-			_ = c.consumer.Nack(ctx, d.ID)
-			if retryableWrite(err) {
+			c.nack(d.ID)
+			if retryableWrite(err) && ctx.Err() == nil {
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
+					c.log.Info("collector shutting down")
+					return nil
 				case <-time.After(time.Second):
 				}
 			}
 			continue
 		}
-		if err := c.consumer.Ack(ctx, d.ID); err != nil {
-			c.log.Warn("ack failed", "id", d.ID, "err", err)
-		}
+		c.ack(d.ID)
 	}
 }
 
@@ -79,7 +86,28 @@ func (c *Collector) handle(ctx context.Context, d ports.Delivery) error {
 		c.log.Error("Error in validating the response")
 		return err
 	}
-	return c.writer.Write(ctx, t)
+	if err := c.writer.Write(ctx, t); err != nil {
+		metrics.CollectorPersistFailures.Inc()
+		return err
+	}
+	metrics.CollectorPersisted.Inc()
+	return nil
+}
+
+func (c *Collector) ack(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := c.consumer.Ack(ctx, id); err != nil {
+		c.log.Warn("ack failed", "id", id, "err", err)
+	}
+}
+
+func (c *Collector) nack(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := c.consumer.Nack(ctx, id); err != nil {
+		c.log.Warn("nack failed", "id", id, "err", err)
+	}
 }
 
 func retryableWrite(err error) bool {

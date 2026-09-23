@@ -22,23 +22,52 @@ type snapshot struct {
 
 // File is a durable JSON-backed repository. Suitable for a single gateway replica + PVC.
 type File struct {
-	path      string
-	mem       *Memory
-	mu        sync.Mutex
-	log       *slog.Logger
-	dirty     bool
-	lastFlush time.Time
+	path         string
+	mem          *Memory
+	mu           sync.Mutex
+	writes       chan struct{}
+	maxOpenConns int
+	maxIdleConns int
+	log          *slog.Logger
+	dirty        bool
+	lastFlush    time.Time
+}
+
+// Config is gateway store configuration from the environment.
+type Config struct {
+	Path         string
+	MaxRecords   int
+	MaxOpenConns int
+	MaxIdleConns int
 }
 
 // Open opens a file repository at the given path.
 func Open(path string) (*File, error) {
+	return OpenConfig(Config{Path: path})
+}
+
+// OpenConfig opens a file repository with capacity and write-concurrency limits.
+func OpenConfig(cfg Config) (*File, error) {
+	path := cfg.Path
 	dir := filepath.Dir(path)
 	if dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("create store dir %s: %w", dir, err)
 		}
 	}
-	s := &File{path: path, mem: NewMemory(), log: slog.Default()}
+	maxOpen := cfg.MaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = 4
+	}
+	writes := make(chan struct{}, maxOpen)
+	s := &File{
+		path:         path,
+		mem:          NewMemorySize(cfg.MaxRecords),
+		writes:       writes,
+		maxOpenConns: maxOpen,
+		maxIdleConns: cfg.MaxIdleConns,
+		log:          slog.Default(),
+	}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
@@ -99,8 +128,31 @@ func (s *File) persistLocked() error {
 	return nil
 }
 
+func (s *File) acquireWrite(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case s.writes <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *File) releaseWrite() {
+	select {
+	case <-s.writes:
+	default:
+	}
+}
+
 // Save saves the telemetry to the repository.
 func (s *File) Save(ctx context.Context, t domain.Telemetry) error {
+	if err := s.acquireWrite(ctx); err != nil {
+		return err
+	}
+	defer s.releaseWrite()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_ = s.mem.Save(ctx, t)

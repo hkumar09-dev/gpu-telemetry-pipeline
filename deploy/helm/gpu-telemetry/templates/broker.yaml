@@ -24,21 +24,39 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "gpu-telemetry.containerSecurity" . | nindent 10 }}
           env:
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
             - name: MQ_ADDR
               value: ":{{ .Values.broker.port }}"
+            - name: MQ_PARTITIONS
+              value: "{{ .Values.broker.partitions }}"
+            - name: MQ_MAX_QUEUE_SIZE
+              value: "{{ .Values.broker.maxQueueSize }}"
+            - name: MQ_ACK_TIMEOUT
+              value: {{ .Values.broker.ackTimeout | quote }}
+            - name: MQ_RETRY_LIMIT
+              value: "{{ .Values.broker.retryLimit }}"
+            - name: MQ_RETRY_BACKOFF
+              value: {{ .Values.broker.retryBackoff | quote }}
+            - name: MQ_RETRY_QUEUE_SIZE
+              value: "{{ .Values.broker.retryQueueSize }}"
+            - name: METRICS_ADDR
+              value: ":{{ .Values.broker.metricsPort }}"
           ports:
             - containerPort: {{ .Values.broker.port }}
               name: mq
+            - containerPort: {{ .Values.broker.metricsPort }}
+              name: http
           readinessProbe:
-            tcpSocket:
-              port: mq
+            httpGet:
+              path: /ready
+              port: http
             initialDelaySeconds: 2
             periodSeconds: 5
           livenessProbe:
-            tcpSocket:
-              port: mq
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            httpGet:
+              path: /health
+              port: http
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
 ---
@@ -57,3 +75,6 @@ spec:
     - port: {{ .Values.broker.port }}
       targetPort: mq
       name: mq
+    - port: {{ .Values.broker.metricsPort }}
+      targetPort: http
+      name: http

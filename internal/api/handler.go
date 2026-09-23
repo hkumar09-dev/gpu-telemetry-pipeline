@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+
+	"github.com/gpu-telemetry-pipeline/internal/metrics"
 )
 
 type Handler struct {
@@ -21,6 +23,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics.Handler())
+	mux.HandleFunc("GET /health", h.svc.health)
+	mux.HandleFunc("GET /health/", h.svc.health)
+	mux.HandleFunc("GET /ready", h.svc.ready)
+	mux.HandleFunc("GET /ready/", h.svc.ready)
 	mux.HandleFunc("GET /healthz", h.svc.health)
 	mux.HandleFunc("GET /healthz/{$}", h.svc.health)
 	mux.HandleFunc("GET /livez", h.svc.health)
@@ -30,5 +37,5 @@ func (h *Handler) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/gpus", h.svc.listGPUs)
 	mux.HandleFunc("GET /api/v1/gpus/{id}/telemetry", h.svc.queryTelemetry)
 	mux.HandleFunc("POST /internal/v1/telemetry", h.svc.ingest)
-	return logging(h.svc.log, mux)
+	return instrument(h.svc.log, mux)
 }

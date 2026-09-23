@@ -48,10 +48,14 @@ spec:
             capabilities:
               drop: ["ALL"]
           env:
+            - name: LOG_LEVEL
+              value: info
             - name: MQ_ADDR
               value: gpu-broker:9000
             - name: MQ_TOPIC
               value: gpu-telemetry
+            - name: CSV_FILE
+              value: /data/dcgm_metrics.csv
             - name: CSV_PATH
               value: /data/dcgm_metrics.csv
             - name: STREAMER_COUNT

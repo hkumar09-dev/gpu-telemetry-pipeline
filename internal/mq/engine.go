@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/gpu-telemetry-pipeline/constants"
+	"github.com/gpu-telemetry-pipeline/internal/metrics"
 )
 
 // Delivery is one in-flight message held until Ack or Nack.
@@ -74,7 +76,7 @@ type inflight struct {
 }
 
 type partition struct {
-	mu  sync.Mutex
+	mu   sync.Mutex
 	next int64
 	buf  chan record
 }
@@ -133,10 +135,12 @@ func (e *Engine) Close() {
 
 func (e *Engine) Publish(ctx context.Context, topic, key string, payload []byte) error {
 	if err := e.errIfClosed(); err != nil {
+		metrics.MQPublishFailures.Inc()
 		return err
 	}
 	select {
 	case <-ctx.Done():
+		metrics.MQPublishFailures.Inc()
 		return ctx.Err()
 	default:
 	}
@@ -144,6 +148,7 @@ func (e *Engine) Publish(ctx context.Context, topic, key string, payload []byte)
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
+		metrics.MQPublishFailures.Inc()
 		return constants.ErrClosed
 	}
 	parts := e.ensureTopicLocked(topic)
@@ -163,8 +168,11 @@ func (e *Engine) Publish(ctx context.Context, topic, key string, payload []byte)
 	select {
 	case p.buf <- rec:
 		e.signal()
+		metrics.MQPublished.Inc()
+		metrics.SetQueueDepth(topic, e.Depth(topic))
 		return nil
 	default:
+		metrics.MQPublishFailures.Inc()
 		return constants.ErrBackpressure
 	}
 }
@@ -220,9 +228,14 @@ func (e *Engine) Consume(ctx context.Context, topic, group, consumerID string, t
 	deadline := time.Now().Add(timeout)
 	for {
 		if err := e.errIfClosed(); err != nil {
+			if !errors.Is(err, constants.ErrClosed) {
+				metrics.MQConsumerFailures.Inc()
+			}
 			return Delivery{}, err
 		}
 		if d, ok := e.tryConsume(topic, group, consumerID); ok {
+			metrics.MQConsumed.Inc()
+			metrics.SetQueueDepth(topic, e.Depth(topic))
 			return d, nil
 		}
 		if timeout <= 0 || time.Now().After(deadline) {
@@ -257,6 +270,7 @@ func (e *Engine) Ack(topic, group, consumerID, id string) error {
 		return constants.ErrNotOwner
 	}
 	delete(gs.inflight, id)
+	metrics.MQAcknowledged.Inc()
 	return nil
 }
 
@@ -388,6 +402,7 @@ func (e *Engine) releaseExpired(gs *groupState) {
 }
 
 func (e *Engine) enqueueRetry(inf inflight) {
+	metrics.MQRetried.Inc()
 	select {
 	case <-e.ctx.Done():
 		return

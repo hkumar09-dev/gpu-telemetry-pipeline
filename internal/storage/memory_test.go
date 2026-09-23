@@ -27,3 +27,15 @@ func TestMemoryWriteAndSort(t *testing.T) {
 		t.Fatalf("same host sort %+v %v", gpus, err)
 	}
 }
+
+func TestNewMemorySize(t *testing.T) {
+	m := NewMemorySize(1)
+	ctx := context.Background()
+	ts := time.Now().UTC()
+	_ = m.Save(ctx, domain.Telemetry{UUID: "a", MetricName: "m", ProcessedAt: ts})
+	_ = m.Save(ctx, domain.Telemetry{UUID: "b", MetricName: "m", ProcessedAt: ts})
+	rows, err := m.QueryByGPU(ctx, "a", domain.TimeWindow{})
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("expected cap to drop a, got %+v %v", rows, err)
+	}
+}

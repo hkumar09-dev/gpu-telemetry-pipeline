@@ -5,18 +5,22 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/metrics"
 	"github.com/gpu-telemetry-pipeline/internal/ports"
 )
 
 // Service documents and serves telemetry query + collector ingest.
 type Service struct {
-	repo ports.Repository
-	log  *slog.Logger
-	ctx  context.Context
+	repo      ports.Repository
+	log       *slog.Logger
+	ctx       context.Context
+	accepting atomic.Bool
 }
 
 func NewService(repo ports.Repository, log *slog.Logger) *Service {
@@ -25,11 +29,33 @@ func NewService(repo ports.Repository, log *slog.Logger) *Service {
 		log = slog.Default()
 	}
 
-	return &Service{repo: repo, log: log, ctx: ctx}
+	s := &Service{repo: repo, log: log, ctx: ctx}
+	s.accepting.Store(true)
+	return s
+}
+
+func (a *Service) Stop() {
+	a.accepting.Store(false)
 }
 
 func (a *Service) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (a *Service) Ready() bool {
+	if !a.accepting.Load() || a.repo == nil {
+		return false
+	}
+	_, err := a.repo.ListGPUs(a.ctx)
+	return err == nil
+}
+
+func (a *Service) ready(w http.ResponseWriter, r *http.Request) {
+	if !a.Ready() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not ready"})
+		return
+	}
+	a.health(w, r)
 }
 
 func (a *Service) listGPUs(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +98,10 @@ func (a *Service) queryTelemetry(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Service) ingest(w http.ResponseWriter, r *http.Request) {
+	if !a.accepting.Load() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "shutting down"})
+		return
+	}
 	var t domain.Telemetry
 	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
 		a.log.Error("error in decoding", "err", err)
@@ -145,11 +175,26 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-func logging(log *slog.Logger, next http.Handler) http.Handler {
+func instrument(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
 		next.ServeHTTP(sw, r)
+		path := r.Pattern
+		if path == "" {
+			path = r.URL.Path
+		}
+		if i := strings.Index(path, " "); i >= 0 {
+			path = path[i+1:]
+		}
+		if path != "/metrics" {
+			code := strconv.Itoa(sw.code)
+			metrics.HTTPRequests.WithLabelValues(r.Method, path, code).Inc()
+			metrics.HTTPDuration.WithLabelValues(r.Method, path).Observe(time.Since(start).Seconds())
+			if sw.code >= 400 {
+				metrics.HTTPErrors.WithLabelValues(r.Method, path, code).Inc()
+			}
+		}
 		attrs := []any{"method", r.Method, "path", r.URL.Path, "status", sw.code, "dur_ms", time.Since(start).Milliseconds()}
 		switch {
 		case sw.code >= 500:

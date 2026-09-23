@@ -20,7 +20,15 @@ type Memory struct {
 
 // NewMemory creates a new in-memory storage.
 func NewMemory() *Memory {
-	return &Memory{gpus: make(map[string]domain.GPU), maxRecords: defaultMaxTelemetry}
+	return NewMemorySize(defaultMaxTelemetry)
+}
+
+// NewMemorySize creates in-memory storage that retains at most maxRecords points.
+func NewMemorySize(maxRecords int) *Memory {
+	if maxRecords <= 0 {
+		maxRecords = defaultMaxTelemetry
+	}
+	return &Memory{gpus: make(map[string]domain.GPU), maxRecords: maxRecords}
 }
 
 // Save stores a telemetry record.

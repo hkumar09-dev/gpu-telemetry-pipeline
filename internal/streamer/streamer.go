@@ -3,12 +3,15 @@ package streamer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/gpu-telemetry-pipeline/internal/clock"
 	"github.com/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/internal/metrics"
 	"github.com/gpu-telemetry-pipeline/internal/ports"
 )
 
@@ -30,6 +33,7 @@ type Streamer struct {
 	clock clock.Clock
 	cfg   Config
 	log   *slog.Logger
+	ready atomic.Bool
 }
 
 // New creates a new streamer.
@@ -70,10 +74,17 @@ func (s *Streamer) Run(ctx context.Context) error {
 	}
 
 	s.log.Info("streamer loaded csv", "rows", len(rows), "index", s.cfg.Index, "count", s.cfg.Count)
+	s.ready.Store(true)
 
 	iter := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return s.shutdown(err)
+		}
 		if err := s.emitPass(ctx, rows); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return s.shutdown(err)
+			}
 			s.log.Error("emit pass failed", "err", err)
 			return err
 		}
@@ -82,6 +93,15 @@ func (s *Streamer) Run(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func (s *Streamer) shutdown(err error) error {
+	s.ready.Store(false)
+	s.log.Info("streamer shutting down")
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	return err
 }
 
 // emitPass emits a pass of the dataset.
@@ -101,8 +121,10 @@ func (s *Streamer) emitPass(ctx context.Context, rows []domain.Telemetry) error 
 		body, _ := json.Marshal(row)
 		if err := s.pub.Publish(ctx, s.cfg.Topic, row.UUID, body); err != nil {
 			s.log.Error("publish failed", "index", i, "err", err)
+			metrics.StreamerPublishFailures.Inc()
 			return fmt.Errorf("publish: %w", err)
 		}
+		metrics.StreamerProcessed.Inc()
 
 		// Wait for interval
 		select {
@@ -112,4 +134,9 @@ func (s *Streamer) emitPass(ctx context.Context, rows []domain.Telemetry) error 
 		}
 	}
 	return nil
+}
+
+// Ready reports whether the CSV has been loaded.
+func (s *Streamer) Ready() bool {
+	return s.ready.Load()
 }

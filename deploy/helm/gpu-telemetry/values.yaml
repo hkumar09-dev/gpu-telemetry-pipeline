@@ -12,9 +12,21 @@ image:
 broker:
   port: 9000
   partitions: 8
+  maxQueueSize: 10000
+  ackTimeout: 30s
+  retryLimit: 5
+  retryBackoff: 5ms
+  retryQueueSize: 1024
+  metricsPort: 9091
+
+logLevel: info
 
 gateway:
   port: 8080
+  databaseURL: /var/lib/gpu-telemetry/telemetry.json
+  maxOpenConns: 4
+  maxIdleConns: 2
+  maxRecords: 20000
   service:
     type: ClusterIP
     nodePort:
@@ -33,6 +45,10 @@ streamer:
   csvPath: /data/dcgm_metrics.csv
   interval: 10ms
   loop: true
+  metricsPort: 9092
+
+collector:
+  metricsPort: 9093
 
 topic: gpu-telemetry
 group: collectors

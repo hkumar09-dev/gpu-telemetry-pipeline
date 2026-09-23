@@ -6,8 +6,15 @@ services:
         SERVICE: broker
     environment:
       MQ_ADDR: ":9000"
+      LOG_LEVEL: info
+      MQ_PARTITIONS: "8"
+      MQ_MAX_QUEUE_SIZE: "10000"
+      MQ_ACK_TIMEOUT: 30s
+      MQ_RETRY_LIMIT: "5"
+      METRICS_ADDR: ":9091"
     ports:
       - "9000:9000"
+      - "9091:9091"
     networks:
       - gpu-telemetry-net
   gateway:
@@ -17,14 +24,19 @@ services:
         SERVICE: gateway
     environment:
       HTTP_ADDR: ":8080"
+      DATABASE_URL: /var/lib/gpu-telemetry/telemetry.json
       DB_PATH: /var/lib/gpu-telemetry/telemetry.json
+      DB_MAX_OPEN_CONNS: "4"
+      DB_MAX_IDLE_CONNS: "2"
+      DB_MAX_RECORDS: "20000"
+      LOG_LEVEL: info
     user: "0:0"
     volumes:
       - gateway-data:/var/lib/gpu-telemetry
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/ready"]
       interval: 2s
       timeout: 2s
       retries: 15
@@ -43,6 +55,8 @@ services:
       MQ_TOPIC: gpu-telemetry
       MQ_GROUP: collectors
       GATEWAY_URL: http://gateway:8080
+      LOG_LEVEL: info
+      METRICS_ADDR: ":9093"
     depends_on:
       broker:
         condition: service_started
@@ -60,11 +74,14 @@ services:
     environment:
       MQ_ADDR: broker:9000
       MQ_TOPIC: gpu-telemetry
+      CSV_FILE: /data/dcgm_metrics.csv
       CSV_PATH: /data/dcgm_metrics.csv
       STREAMER_INDEX: "0"
       STREAMER_COUNT: "1"
       STREAM_INTERVAL: 5ms
       STREAM_LOOP: "true"
+      LOG_LEVEL: info
+      METRICS_ADDR: ":9092"
     depends_on:
       - broker
     networks:

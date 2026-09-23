@@ -116,6 +116,26 @@ func TestServerListenErrorAndUnknownFrameSize(t *testing.T) {
 	}
 }
 
+func TestServerShutdown(t *testing.T) {
+	engine := NewEngine(Config{Partitions: 1})
+	srv := NewServer(context.Background(), engine, quietLog())
+	go func() { _ = srv.ListenAndServe("127.0.0.1:0") }()
+	addr := waitAddr(t, srv)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Publish(context.Background(), "t", "k", []byte("x")); err == nil {
+		t.Fatal("expected closed engine")
+	}
+}
+
 func TestServerCloseWithoutListen(t *testing.T) {
 	engine := NewEngine(Config{})
 	srv := NewServer(context.Background(), engine, quietLog())

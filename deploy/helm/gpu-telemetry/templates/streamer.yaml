@@ -25,10 +25,14 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "gpu-telemetry.containerSecurity" . | nindent 10 }}
           env:
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
             - name: MQ_ADDR
               value: "{{ .Release.Name }}-broker:{{ .Values.broker.port }}"
             - name: MQ_TOPIC
               value: {{ .Values.topic | quote }}
+            - name: CSV_FILE
+              value: {{ .Values.streamer.csvPath | quote }}
             - name: CSV_PATH
               value: {{ .Values.streamer.csvPath | quote }}
             - name: STREAMER_COUNT
@@ -41,6 +45,23 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: METRICS_ADDR
+              value: ":{{ .Values.streamer.metricsPort }}"
+          ports:
+            - containerPort: {{ .Values.streamer.metricsPort }}
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
 ---
@@ -56,3 +77,7 @@ spec:
   selector:
     app.kubernetes.io/component: streamer
     {{- include "gpu-telemetry.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: {{ .Values.streamer.metricsPort }}
+      targetPort: http
+      name: http

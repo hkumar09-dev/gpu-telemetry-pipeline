@@ -59,6 +59,9 @@ func TestStreamerShardsAndStamps(t *testing.T) {
 	if err := s.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if !s.Ready() {
+		t.Fatal("expected ready after load")
+	}
 	if len(pub.msgs) != 2 {
 		t.Fatalf("shard should emit 2 messages, got %d", len(pub.msgs))
 	}
@@ -101,8 +104,8 @@ func TestStreamerLoadErrorInvalidLoopAndPublish(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	s = New(stubSource{rows: []domain.Telemetry{{UUID: "g", MetricName: "m", GPUIndex: "0"}}}, &capturePub{}, clock.FixedClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, Config{Interval: time.Hour}, quietLog())
-	if err := s.Run(ctx); err == nil {
-		t.Fatal("expected cancel")
+	if err := s.Run(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -127,8 +130,8 @@ func TestStreamerDefaultsAndCancelDuringInterval(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	pub := &cancelPub{cancel: cancel}
 	s = New(stubSource{rows: []domain.Telemetry{{UUID: "g", MetricName: "m", GPUIndex: "0"}}}, pub, clock.FixedClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, Config{Interval: time.Hour}, quietLog())
-	if err := s.Run(ctx); err == nil {
-		t.Fatal("expected cancel during interval")
+	if err := s.Run(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 

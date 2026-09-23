@@ -14,35 +14,40 @@ import (
 
 	"github.com/gpu-telemetry-pipeline/constants"
 	"github.com/gpu-telemetry-pipeline/internal/domain"
+	"github.com/gpu-telemetry-pipeline/utils"
 )
 
 // HTTPWriter posts telemetry to the gateway ingest endpoint.
 type HTTPWriter struct {
-	BaseURL string
-	Client  *http.Client
-	Path    string
+	BaseURL        string
+	Client         *http.Client
+	Path           string
+	maxAttempts    int
+	initialBackoff time.Duration
 }
 
 // NewHTTPWriter creates a new HTTPWriter.
 func NewHTTPWriter(baseURL string) *HTTPWriter {
+	n := utils.EnvInt("HTTP_MAX_RETRIES", constants.MAX_RETRY_ATTEMPTS)
+	if n <= 0 {
+		n = constants.MAX_RETRY_ATTEMPTS
+	}
+	backoff := utils.EnvDuration("HTTP_INITIAL_BACKOFF", constants.INITIAL_BACKOFF)
 	return &HTTPWriter{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		Path:    "/internal/v1/telemetry",
-		Client:  &http.Client{Timeout: 10 * time.Second},
+		BaseURL:        strings.TrimRight(baseURL, "/"),
+		Path:           "/internal/v1/telemetry",
+		Client:         &http.Client{Timeout: utils.EnvDuration("HTTP_TIMEOUT", 10*time.Second)},
+		maxAttempts:    n,
+		initialBackoff: backoff,
 	}
 }
-
-var (
-	httpMaxAttempts    = constants.MAX_RETRY_ATTEMPTS
-	httpInitialBackoff = constants.INITIAL_BACKOFF
-)
 
 func (w *HTTPWriter) Write(ctx context.Context, t domain.Telemetry) error {
 	body, _ := json.Marshal(t)
 
-	backoff := httpInitialBackoff
+	backoff := w.initialBackoff
 	var last error
-	for attempt := 0; attempt < httpMaxAttempts; attempt++ {
+	for attempt := 0; attempt < w.maxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

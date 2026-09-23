@@ -205,3 +205,18 @@ func TestFileLoadCapsTelemetry(t *testing.T) {
 		t.Fatalf("capped load %d %v", len(rows), err)
 	}
 }
+
+func TestOpenConfigAndCanceledWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "store.json")
+	db, err := OpenConfig(Config{Path: path, MaxRecords: 3, MaxOpenConns: 1, MaxIdleConns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = db.Save(ctx, domain.Telemetry{UUID: "g", MetricName: "m", ProcessedAt: time.Now().UTC()})
+	if err == nil {
+		t.Fatal("expected canceled save")
+	}
+}

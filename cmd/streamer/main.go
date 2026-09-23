@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 	"github.com/gpu-telemetry-pipeline/internal/clock"
 	"github.com/gpu-telemetry-pipeline/internal/csvsource"
 	"github.com/gpu-telemetry-pipeline/internal/mq"
+	"github.com/gpu-telemetry-pipeline/internal/observe"
 	"github.com/gpu-telemetry-pipeline/internal/ports"
 	"github.com/gpu-telemetry-pipeline/internal/streamer"
 	"github.com/gpu-telemetry-pipeline/utils"
@@ -23,9 +25,7 @@ var (
 	maxPublishAttempts    = constants.MAX_RETRY_ATTEMPTS
 	osExit                = os.Exit
 	initialPublishBackoff = constants.INITIAL_BACKOFF
-	newLogger             = func() *slog.Logger {
-		return slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	}
+	newLogger             = utils.NewJSONLogger
 )
 
 func main() {
@@ -39,24 +39,44 @@ func run(parent context.Context) error {
 	ctx, cancel := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	if n := utils.EnvInt("PUBLISH_MAX_RETRIES", 0); n > 0 {
+		maxPublishAttempts = n
+	}
+	if os.Getenv("PUBLISH_INITIAL_BACKOFF") != "" {
+		initialPublishBackoff = utils.EnvDuration("PUBLISH_INITIAL_BACKOFF", initialPublishBackoff)
+	}
+
 	s := streamer.New(
-		csvsource.FileSource{Path: utils.Getenv("CSV_PATH", "/data/dcgm_metrics.csv")},
-		retryPublisher{inner: mq.NewClient(utils.Getenv("MQ_ADDR", "127.0.0.1:9000")), log: log},
+		csvsource.FileSource{Path: utils.CSVFile()},
+		retryPublisher{inner: mq.NewClient(utils.Getenv("MQ_ADDR", utils.DefaultMQClientAddr)), log: log},
 		clock.SystemClock{},
 		streamer.Config{
-			Topic:    utils.Getenv("MQ_TOPIC", "gpu-telemetry"),
+			Topic:    utils.Getenv("MQ_TOPIC", utils.DefaultMQTopic),
 			Index:    shardIndex(),
 			Count:    atoi(utils.Getenv("STREAMER_COUNT", "1")),
-			Interval: duration(utils.Getenv("STREAM_INTERVAL", "10ms")),
-			Loop:     utils.Getenv("STREAM_LOOP", "true") == "true",
+			Interval: utils.EnvDuration("STREAM_INTERVAL", utils.DefaultStreamInterval),
+			Loop:     utils.EnvBool("STREAM_LOOP", true),
 		},
 		log,
 	)
 
-	if err := s.Run(ctx); err != nil && ctx.Err() == nil {
-		log.Error("streamer failed", "err", err)
+	metricsStop, err := observe.Listen(ctx, utils.Getenv("METRICS_ADDR", utils.DefaultStreamerMetrics), s.Ready, log)
+	if err != nil {
+		log.Error("metrics listen", "err", err)
 		return err
 	}
+
+	runErr := s.Run(ctx)
+	shctx, stop := context.WithTimeout(context.Background(), utils.ShutdownTimeout())
+	defer stop()
+	if err := metricsStop(shctx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		log.Error("metrics shutdown", "err", err)
+	}
+	if runErr != nil {
+		log.Error("streamer failed", "err", runErr)
+		return runErr
+	}
+	log.Info("streamer shutdown complete")
 	return nil
 }
 

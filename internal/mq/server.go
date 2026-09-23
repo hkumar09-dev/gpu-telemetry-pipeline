@@ -7,7 +7,10 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/gpu-telemetry-pipeline/constants"
 )
 
 // Server exposes Engine over a length-prefixed JSON TCP protocol.
@@ -17,14 +20,16 @@ type Server struct {
 	log      *slog.Logger
 	mu       sync.Mutex
 	listener net.Listener
+	conns    map[net.Conn]struct{}
 	wg       sync.WaitGroup
+	stopping atomic.Bool
 }
 
 func NewServer(ctx context.Context, engine *Engine, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{ctx: ctx, engine: engine, log: log}
+	return &Server{ctx: ctx, engine: engine, log: log, conns: make(map[net.Conn]struct{})}
 }
 
 // ListenAndServe starts a broker server.
@@ -42,36 +47,98 @@ func (s *Server) ListenAndServe(addr string) error {
 	return s.serve(listener)
 }
 
-// Serve starts a broker server.
 func (s *Server) serve(ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
+			if errors.Is(err, net.ErrClosed) || s.stopping.Load() {
 				s.log.Info("broker closed")
 				return nil
 			}
 			s.log.Error("accept failed", "err", err)
 			return err
 		}
+		if s.stopping.Load() {
+			_ = conn.Close()
+			continue
+		}
+		s.track(conn)
 		s.wg.Add(1)
-		go func() {
+		go func(c net.Conn) {
 			defer s.wg.Done()
-			s.handle(conn)
-		}()
+			defer s.untrack(c)
+			s.handle(c)
+		}(conn)
 	}
 }
 
-func (s *Server) Close() error {
+// Shutdown stops accepting, waits for in-flight TCP handlers, then closes the engine.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.stopping.Store(true)
+
 	s.mu.Lock()
 	ln := s.listener
 	s.mu.Unlock()
 	if ln != nil {
-		_ = ln.Close()
+		if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			s.log.Error("close listener", "err", err)
+		}
 	}
-	s.engine.Close()
-	s.wg.Wait()
-	return nil
+
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		s.engine.Close()
+		return nil
+	case <-ctx.Done():
+		s.forceCloseConns()
+		select {
+		case <-done:
+		case <-time.After(500 * time.Millisecond):
+		}
+		s.engine.Close()
+		return ctx.Err()
+	}
+}
+
+// Close is Shutdown with a 5s timeout (tests and fallbacks).
+func (s *Server) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := s.Shutdown(ctx)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	return err
+}
+
+func (s *Server) track(c net.Conn) {
+	s.mu.Lock()
+	s.conns[c] = struct{}{}
+	s.mu.Unlock()
+}
+
+func (s *Server) untrack(c net.Conn) {
+	s.mu.Lock()
+	delete(s.conns, c)
+	s.mu.Unlock()
+}
+
+func (s *Server) forceCloseConns() {
+	s.mu.Lock()
+	conns := make([]net.Conn, 0, len(s.conns))
+	for c := range s.conns {
+		conns = append(conns, c)
+	}
+	s.mu.Unlock()
+	for _, c := range conns {
+		_ = c.Close()
+	}
 }
 
 func (s *Server) Addr() string {
@@ -88,9 +155,16 @@ func (s *Server) handle(conn net.Conn) {
 	br := bufio.NewReader(conn)
 	var sub *struct{ topic, group, id string }
 	for {
-		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Minute))
+		_ = conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 		f, err := readFrame(br)
 		if err != nil {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				if s.stopping.Load() {
+					return
+				}
+				continue
+			}
 			return
 		}
 		resp := s.dispatch(f, &sub)
@@ -103,9 +177,15 @@ func (s *Server) handle(conn net.Conn) {
 func (s *Server) dispatch(f frame, sub **struct{ topic, group, id string }) frame {
 	switch f.Op {
 	case opPublish:
-		err := s.engine.Publish(context.Background(), f.Topic, f.Key, f.Payload)
+		if s.stopping.Load() {
+			return errFrame(constants.ErrClosed)
+		}
+		err := s.engine.Publish(s.ctx, f.Topic, f.Key, f.Payload)
 		return errFrame(err)
 	case opSub:
+		if s.stopping.Load() {
+			return errFrame(constants.ErrClosed)
+		}
 		s.engine.Subscribe(f.Topic, f.Group, f.ConsumerID)
 		*sub = &struct{ topic, group, id string }{f.Topic, f.Group, f.ConsumerID}
 		return frame{Op: opResponse}
@@ -118,7 +198,7 @@ func (s *Server) dispatch(f frame, sub **struct{ topic, group, id string }) fram
 		if timeout <= 0 {
 			timeout = time.Second
 		}
-		d, err := s.engine.Consume(context.Background(), f.Topic, f.Group, f.ConsumerID, timeout)
+		d, err := s.engine.Consume(s.ctx, f.Topic, f.Group, f.ConsumerID, timeout)
 		if err != nil {
 			return errFrame(err)
 		}

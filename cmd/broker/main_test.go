@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+func TestMain(m *testing.M) {
+	os.Setenv("METRICS_ADDR", "-")
+	os.Exit(m.Run())
+}
+
 func quietLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

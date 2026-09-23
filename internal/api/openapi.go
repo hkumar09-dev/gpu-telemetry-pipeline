@@ -12,10 +12,36 @@ servers:
 paths:
   /healthz:
     get:
-      summary: Liveness and readiness
+      summary: Liveness
       responses:
         "200":
-          description: Service is healthy
+          description: Process is alive
+  /livez:
+    get:
+      summary: Liveness (alias of /health)
+      responses:
+        "200":
+          description: Process is alive
+  /health:
+    get:
+      summary: Liveness
+      responses:
+        "200":
+          description: Process is alive
+  /ready:
+    get:
+      summary: Readiness
+      responses:
+        "200":
+          description: Store is readable
+        "503":
+          description: Not ready
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: Prometheus text exposition format
   /api/v1/gpus:
     get:
       summary: List all GPUs

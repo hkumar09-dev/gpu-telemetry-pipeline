@@ -14,6 +14,11 @@ import (
 	"github.com/gpu-telemetry-pipeline/internal/mq"
 )
 
+func TestMain(m *testing.M) {
+	os.Setenv("METRICS_ADDR", "-")
+	os.Exit(m.Run())
+}
+
 func useQuietLog(t *testing.T) {
 	t.Helper()
 	old := newLogger

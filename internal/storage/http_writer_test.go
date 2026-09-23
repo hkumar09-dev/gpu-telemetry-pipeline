@@ -119,36 +119,26 @@ func TestHTTPWriterCancelDuringRetry(t *testing.T) {
 }
 
 func TestHTTPWriterExhaustsRetries(t *testing.T) {
-	oldA, oldB := httpMaxAttempts, httpInitialBackoff
-	httpMaxAttempts = 2
-	httpInitialBackoff = time.Millisecond
-	t.Cleanup(func() {
-		httpMaxAttempts = oldA
-		httpInitialBackoff = oldB
-	})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
 	w := NewHTTPWriter(srv.URL)
+	w.maxAttempts = 2
+	w.initialBackoff = time.Millisecond
 	if err := w.Write(context.Background(), domain.Telemetry{UUID: "g", MetricName: "m", ProcessedAt: time.Now().UTC()}); err == nil {
 		t.Fatal("expected last error")
 	}
 }
 
 func TestHTTPWriterBackoffCap(t *testing.T) {
-	oldA, oldB := httpMaxAttempts, httpInitialBackoff
-	httpMaxAttempts = 2
-	httpInitialBackoff = constants.MAX_BACKOFF
-	t.Cleanup(func() {
-		httpMaxAttempts = oldA
-		httpInitialBackoff = oldB
-	})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	t.Cleanup(srv.Close)
 	w := NewHTTPWriter(srv.URL)
+	w.maxAttempts = 2
+	w.initialBackoff = constants.MAX_BACKOFF
 	_ = w.Write(context.Background(), domain.Telemetry{UUID: "g", MetricName: "m", ProcessedAt: time.Now().UTC()})
 }
 
@@ -175,11 +165,15 @@ func TestHTTPWriterPostBadStatus(t *testing.T) {
 	}
 }
 
-func TestHTTPWriterCanceled(t *testing.T) {
+func TestHTTPWriterEnvTimeoutAndRetries(t *testing.T) {
+	t.Setenv("HTTP_TIMEOUT", "50ms")
+	t.Setenv("HTTP_MAX_RETRIES", "2")
+	t.Setenv("HTTP_INITIAL_BACKOFF", "1ms")
 	w := NewHTTPWriter("http://127.0.0.1:1")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := w.Write(ctx, domain.Telemetry{UUID: "g", MetricName: "m", ProcessedAt: time.Now().UTC()}); err == nil {
-		t.Fatal("expected cancel")
+	if w.Client.Timeout != 50*time.Millisecond {
+		t.Fatalf("timeout %s", w.Client.Timeout)
+	}
+	if w.maxAttempts != 2 || w.initialBackoff != time.Millisecond {
+		t.Fatalf("retries %d %s", w.maxAttempts, w.initialBackoff)
 	}
 }

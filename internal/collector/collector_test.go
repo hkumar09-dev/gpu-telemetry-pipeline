@@ -139,8 +139,8 @@ func TestCollectorRetryableWriteCancel(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		cancel()
 	}()
-	if err := c.Run(ctx); err == nil {
-		t.Fatal("expected cancel during retry wait")
+	if err := c.Run(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
 

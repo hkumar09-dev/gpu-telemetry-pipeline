@@ -26,16 +26,26 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "gpu-telemetry.containerSecurity" . | nindent 10 }}
           env:
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
             - name: HTTP_ADDR
               value: ":{{ .Values.gateway.port }}"
+            - name: DATABASE_URL
+              value: {{ .Values.gateway.databaseURL | quote }}
             - name: DB_PATH
-              value: /var/lib/gpu-telemetry/telemetry.json
+              value: {{ .Values.gateway.databaseURL | quote }}
+            - name: DB_MAX_OPEN_CONNS
+              value: "{{ .Values.gateway.maxOpenConns }}"
+            - name: DB_MAX_IDLE_CONNS
+              value: "{{ .Values.gateway.maxIdleConns }}"
+            - name: DB_MAX_RECORDS
+              value: "{{ .Values.gateway.maxRecords }}"
           ports:
             - containerPort: {{ .Values.gateway.port }}
               name: http
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /ready
               port: http
             initialDelaySeconds: 3
             periodSeconds: 5
@@ -43,7 +53,7 @@ spec:
             failureThreshold: 6
           livenessProbe:
             httpGet:
-              path: /livez
+              path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10

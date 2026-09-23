@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,6 +109,21 @@ func TestHealthAndOpenAPI(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("livez slash %d", rec.Code)
 	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != 200 {
+		t.Fatalf("health %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if rec.Code != 200 {
+		t.Fatalf("ready %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "gpu_telemetry") {
+		t.Fatalf("metrics %d %s", rec.Code, rec.Body.String()[:min(80, rec.Body.Len())])
+	}
 }
 
 type errRepo struct {
@@ -131,6 +147,17 @@ func TestServiceErrorPaths(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("list %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("ready %d", rec.Code)
+	}
+
+	stopped := NewService(storage.NewMemory(), quietLog())
+	stopped.Stop()
+	if stopped.Ready() {
+		t.Fatal("stop should not be ready")
 	}
 
 	h = NewHandler(NewService(errRepo{}, quietLog()))
