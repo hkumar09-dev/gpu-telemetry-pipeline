@@ -180,13 +180,7 @@ func instrument(log *slog.Logger, next http.Handler) http.Handler {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		path := r.Pattern
-		if path == "" {
-			path = r.URL.Path
-		}
-		if i := strings.Index(path, " "); i >= 0 {
-			path = path[i+1:]
-		}
+		path := metricPath(r.URL.Path)
 		if path != "/metrics" {
 			code := strconv.Itoa(sw.code)
 			metrics.HTTPRequests.WithLabelValues(r.Method, path, code).Inc()
@@ -207,4 +201,13 @@ func instrument(log *slog.Logger, next http.Handler) http.Handler {
 			log.Info("http", attrs...)
 		}
 	})
+}
+
+func metricPath(path string) string {
+	const prefix = "/api/v1/gpus/"
+	const suffix = "/telemetry"
+	if strings.HasPrefix(path, prefix) && strings.HasSuffix(path, suffix) && len(path) > len(prefix)+len(suffix) {
+		return "/api/v1/gpus/{id}/telemetry"
+	}
+	return path
 }
