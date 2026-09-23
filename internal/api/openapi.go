@@ -8,7 +8,7 @@ info:
   version: 1.0.0
   description: Query GPU telemetry persisted by the elastic collector pipeline.
 servers:
-  - url: /
+  - url: http://localhost:8080
 paths:
   /healthz:
     get:
