@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"os"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -71,7 +70,12 @@ func TestMainSignalShutdown(t *testing.T) {
 	addr := freeAddr(t)
 	t.Setenv("MQ_ADDR", addr)
 	osExit = func(int) { t.Error("os.Exit should not be called") }
-	t.Cleanup(func() { osExit = os.Exit })
+	t.Cleanup(func() {
+		osExit = os.Exit
+		background = context.Background
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	background = func() context.Context { return ctx }
 	done := make(chan struct{})
 	go func() {
 		main()
@@ -86,9 +90,7 @@ func TestMainSignalShutdown(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
+	cancel()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):

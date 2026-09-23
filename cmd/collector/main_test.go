@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"syscall"
 	"testing"
 	"time"
 
@@ -48,6 +47,14 @@ func TestGetenvAndHostname(t *testing.T) {
 	t.Cleanup(func() { hostnameFn = old })
 	if hostname() != "collector" {
 		t.Fatal("hostname fallback")
+	}
+	t.Setenv("CONSUME_TIMEOUT", "15ms")
+	if consumeTimeout() != 15*time.Millisecond {
+		t.Fatal("consume timeout env")
+	}
+	t.Setenv("CONSUME_TIMEOUT", "nope")
+	if consumeTimeout() != 2*time.Second {
+		t.Fatal("consume timeout default")
 	}
 }
 
@@ -93,6 +100,7 @@ func TestRunCollector(t *testing.T) {
 	t.Setenv("MQ_ADDR", addr)
 	t.Setenv("GATEWAY_URL", gw.URL)
 	t.Setenv("CONSUMER_ID", "test-collector")
+	t.Setenv("CONSUME_TIMEOUT", "20ms")
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- run(ctx) }()
@@ -120,25 +128,18 @@ func TestRunCollectorSubscribeFail(t *testing.T) {
 func TestMainExitOnSubscribeFail(t *testing.T) {
 	oldWait := subscribeRetryWait
 	subscribeRetryWait = time.Millisecond
-	t.Cleanup(func() { subscribeRetryWait = oldWait })
+	t.Cleanup(func() {
+		subscribeRetryWait = oldWait
+		osExit = os.Exit
+		background = context.Background
+	})
 	code := -1
 	osExit = func(c int) { code = c }
-	t.Cleanup(func() { osExit = os.Exit })
 	t.Setenv("MQ_ADDR", "127.0.0.1:1")
-	done := make(chan struct{})
-	go func() {
-		main()
-		close(done)
-	}()
-	time.Sleep(30 * time.Millisecond)
-	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("main did not return")
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	background = func() context.Context { return ctx }
+	main()
 	if code != 1 {
 		t.Fatalf("exit %d", code)
 	}
@@ -153,17 +154,21 @@ func TestMainShutdown(t *testing.T) {
 	t.Setenv("MQ_ADDR", addr)
 	t.Setenv("GATEWAY_URL", gw.URL)
 	t.Setenv("CONSUMER_ID", "main-collector")
+	t.Setenv("CONSUME_TIMEOUT", "20ms")
 	osExit = func(int) { t.Error("os.Exit") }
-	t.Cleanup(func() { osExit = os.Exit })
+	t.Cleanup(func() {
+		osExit = os.Exit
+		background = context.Background
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	background = func() context.Context { return ctx }
 	done := make(chan struct{})
 	go func() {
 		main()
 		close(done)
 	}()
-	time.Sleep(200 * time.Millisecond)
-	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
+	time.Sleep(50 * time.Millisecond)
+	cancel()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):

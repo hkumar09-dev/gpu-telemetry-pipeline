@@ -16,12 +16,13 @@ import (
 
 var (
 	osExit             = os.Exit
+	background         = context.Background
 	subscribeRetryWait = 2 * time.Second
 	hostnameFn         = os.Hostname
 )
 
 func main() {
-	if err := run(context.Background()); err != nil {
+	if err := run(background()); err != nil {
 		osExit(1)
 	}
 }
@@ -41,11 +42,18 @@ func run(parent context.Context) error {
 	defer cons.Close()
 
 	c := collector.New(cons, storage.NewHTTPWriter(getenv("GATEWAY_URL", "http://127.0.0.1:8080")), collector.Config{
-		ConsumeTimeout: 2 * time.Second,
+		ConsumeTimeout: consumeTimeout(),
 	}, log)
 
 	_ = c.Run(ctx)
 	return nil
+}
+
+func consumeTimeout() time.Duration {
+	if d, err := time.ParseDuration(getenv("CONSUME_TIMEOUT", "2s")); err == nil && d > 0 {
+		return d
+	}
+	return 2 * time.Second
 }
 
 func getenv(k, def string) string {

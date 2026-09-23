@@ -14,10 +14,13 @@ import (
 	"github.com/gpu-telemetry-pipeline/utils"
 )
 
-var osExit = os.Exit
+var (
+	osExit     = os.Exit
+	background = context.Background
+)
 
 func main() {
-	if err := run(context.Background()); err != nil {
+	if err := run(background()); err != nil {
 		osExit(1)
 	}
 }
