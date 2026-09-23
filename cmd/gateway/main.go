@@ -14,27 +14,31 @@ import (
 	"github.com/gpu-telemetry-pipeline/utils"
 )
 
-func main() {
+var osExit = os.Exit
 
+func main() {
+	if err := run(context.Background()); err != nil {
+		osExit(1)
+	}
+}
+
+func run(parent context.Context) error {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	db, err := storage.Open(utils.Getenv("DB_PATH", "/var/lib/gpu-telemetry/telemetry.json"))
 	if err != nil {
 		log.Error("open db", "err", err)
-		os.Exit(1)
+		return err
 	}
-	
 	defer db.Close()
 
 	svc := api.NewService(db, log)
-
-	//api := api.New(db, log)
 	srv := &http.Server{
 		Addr:              utils.Getenv("HTTP_ADDR", ":8080"),
 		Handler:           api.NewHandler(svc),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	go func() {
 		<-ctx.Done()
@@ -46,13 +50,7 @@ func main() {
 	log.Info("gateway listening", "addr", srv.Addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Error("gateway failed", "err", err)
-		os.Exit(1)
+		return err
 	}
+	return nil
 }
-
-//func getenv(k, def string) string {
-//	if v := os.Getenv(k); v != "" {
-//		return v
-//	}
-//	return def
-//}

@@ -20,6 +20,24 @@ func TestValidateAndWindow(t *testing.T) {
 	if !window.Contains(ts) {
 		t.Fatal("should contain")
 	}
+	if err := (Telemetry{}).Validate(); err == nil {
+		t.Fatal("uuid required")
+	}
+	if err := (Telemetry{UUID: "id"}).Validate(); err == nil {
+		t.Fatal("metric required")
+	}
+	if err := (Telemetry{UUID: "id", MetricName: "m"}).Validate(); err == nil {
+		t.Fatal("time required")
+	}
+	early := ts.Add(-time.Second)
+	startOnly := TimeWindow{Start: &ts}
+	if startOnly.Contains(early) {
+		t.Fatal("before start")
+	}
+	open := TimeWindow{}
+	if !open.Contains(ts) {
+		t.Fatal("empty window")
+	}
 	late := ts.Add(2 * time.Second)
 	closed := TimeWindow{End: &end}
 	if closed.Contains(late) {

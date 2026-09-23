@@ -29,6 +29,7 @@ type Config struct {
 	AckTimeout      time.Duration
 	MaxRetries      int
 	RetryBackoff    time.Duration
+	RetryQueueSize  int
 }
 
 func (c Config) withDefaults() Config {
@@ -46,6 +47,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.RetryBackoff <= 0 {
 		c.RetryBackoff = 5 * time.Millisecond
+	}
+	if c.RetryQueueSize <= 0 {
+		c.RetryQueueSize = 1024
 	}
 	return c
 }
@@ -108,7 +112,7 @@ func NewEngine(cfg Config) *Engine {
 		topics:  make(map[string][]*partition),
 		groups:  make(map[string]*groupState),
 		wake:    make(chan struct{}, 1),
-		retries: make(chan inflight, 1024),
+		retries: make(chan inflight, cfg.RetryQueueSize),
 	}
 	go e.retryLoop()
 	go e.ackTimeoutLoop()

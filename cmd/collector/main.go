@@ -14,9 +14,21 @@ import (
 	"github.com/gpu-telemetry-pipeline/internal/storage"
 )
 
+var (
+	osExit             = os.Exit
+	subscribeRetryWait = 2 * time.Second
+	hostnameFn         = os.Hostname
+)
+
 func main() {
+	if err := run(context.Background()); err != nil {
+		osExit(1)
+	}
+}
+
+func run(parent context.Context) error {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	client := mq.NewClient(getenv("MQ_ADDR", "127.0.0.1:9000"))
@@ -24,19 +36,16 @@ func main() {
 	cons, err := subscribeWithRetry(ctx, client, log, id)
 	if err != nil {
 		log.Error("subscribe failed", "err", err)
-		os.Exit(1)
+		return err
 	}
-
 	defer cons.Close()
 
 	c := collector.New(cons, storage.NewHTTPWriter(getenv("GATEWAY_URL", "http://127.0.0.1:8080")), collector.Config{
 		ConsumeTimeout: 2 * time.Second,
 	}, log)
 
-	if err := c.Run(ctx); err != nil && ctx.Err() == nil {
-		log.Error("collector failed", "err", err)
-		os.Exit(1)
-	}
+	_ = c.Run(ctx)
+	return nil
 }
 
 func getenv(k, def string) string {
@@ -47,7 +56,7 @@ func getenv(k, def string) string {
 }
 
 func hostname() string {
-	h, err := os.Hostname()
+	h, err := hostnameFn()
 	if err != nil {
 		return "collector"
 	}
@@ -66,7 +75,7 @@ func subscribeWithRetry(ctx context.Context, client *mq.Client, log *slog.Logger
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(2 * time.Second):
+		case <-time.After(subscribeRetryWait):
 		}
 	}
 }

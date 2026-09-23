@@ -6,13 +6,18 @@ import (
 	"github.com/gpu-telemetry-pipeline/internal/api"
 )
 
-// generate openapi spec
+var osExit = os.Exit
+
 func main() {
+	if err := generate(os.Args); err != nil {
+		osExit(1)
+	}
+}
+
+func generate(args []string) error {
 	path := "api/openapi.yaml"
-	if len(os.Args) > 1 {
-		path = os.Args[1]
+	if len(args) > 1 {
+		path = args[1]
 	}
-	if err := os.WriteFile(path, []byte(api.OpenAPISpec), 0o644); err != nil {
-		panic(err)
-	}
+	return os.WriteFile(path, []byte(api.OpenAPISpec), 0o644)
 }

@@ -1,6 +1,6 @@
 .PHONY: test coverage coverage-html openapi build docker-build tidy helm-deploy helm-delete
 
-COVERPKG := ./internal/...
+COVERPKG := ./...
 
 IMAGE_TAG ?= local
 RELEASE_NAME := gpu
@@ -68,3 +68,6 @@ helm-deploy: docker-build
 
 helm-delete:
 	helm uninstall $(RELEASE_NAME) --namespace $(NAMESPACE) --wait || true
+
+forward:
+	kubectl -n $(NAMESPACE) port-forward service/gpu-gateway 8080:8080

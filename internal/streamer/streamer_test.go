@@ -3,6 +3,7 @@ package streamer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 
 type stubSource struct{ rows []domain.Telemetry }
 
-func (s stubSource) Load() ([]domain.Telemetry, error) { return s.rows, nil }
+func (s stubSource) Load(context.Context) ([]domain.Telemetry, error) { return s.rows, nil }
 
 type capturePub struct {
 	mu   sync.Mutex
@@ -71,3 +72,63 @@ func TestStreamerShardsAndStamps(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamerLoadErrorInvalidLoopAndPublish(t *testing.T) {
+	src := errSource{err: fmt.Errorf("no csv")}
+	s := New(src, &capturePub{}, clock.SystemClock{}, Config{Topic: "t"}, nil)
+	if err := s.Run(context.Background()); err == nil {
+		t.Fatal("expected load error")
+	}
+
+	rows := []domain.Telemetry{
+		{UUID: "", MetricName: "m", GPUIndex: "0"},
+		{UUID: "g1", MetricName: "util", GPUIndex: "0"},
+	}
+	pub := &failPub{}
+	s = New(stubSource{rows}, pub, clock.FixedClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, Config{
+		Topic: "t", Interval: time.Millisecond, Loop: true, MaxIterations: 1,
+	}, nil)
+	if err := s.Run(context.Background()); err == nil {
+		t.Fatal("expected publish error")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s = New(stubSource{rows: []domain.Telemetry{{UUID: "g", MetricName: "m", GPUIndex: "0"}}}, &capturePub{}, clock.FixedClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, Config{Interval: time.Hour}, nil)
+	if err := s.Run(ctx); err == nil {
+		t.Fatal("expected cancel")
+	}
+}
+
+type errSource struct{ err error }
+
+func (e errSource) Load(context.Context) ([]domain.Telemetry, error) { return nil, e.err }
+
+type failPub struct{}
+
+func (failPub) Publish(context.Context, string, string, []byte) error { return fmt.Errorf("pub fail") }
+
+func TestStreamerDefaultsAndCancelDuringInterval(t *testing.T) {
+	s := New(stubSource{}, &capturePub{}, nil, Config{Index: -1}, nil)
+	if s.cfg.Count != 1 || s.cfg.Index != 0 || s.cfg.Topic != "gpu-telemetry" {
+		t.Fatalf("%+v", s.cfg)
+	}
+	if err := s.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	pub := &cancelPub{cancel: cancel}
+	s = New(stubSource{rows: []domain.Telemetry{{UUID: "g", MetricName: "m", GPUIndex: "0"}}}, pub, clock.FixedClock{T: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}, Config{Interval: time.Hour}, nil)
+	if err := s.Run(ctx); err == nil {
+		t.Fatal("expected cancel during interval")
+	}
+}
+
+type cancelPub struct{ cancel context.CancelFunc }
+
+func (c *cancelPub) Publish(context.Context, string, string, []byte) error {
+	c.cancel()
+	return nil
+}
+

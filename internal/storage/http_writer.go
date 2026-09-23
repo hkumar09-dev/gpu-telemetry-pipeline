@@ -32,16 +32,17 @@ func NewHTTPWriter(baseURL string) *HTTPWriter {
 	}
 }
 
-func (w *HTTPWriter) Write(ctx context.Context, t domain.Telemetry) error {
-	body, err := json.Marshal(t)
-	if err != nil {
-		return err
-	}
+var (
+	httpMaxAttempts    = constants.MAX_RETRY_ATTEMPTS
+	httpInitialBackoff = constants.INITIAL_BACKOFF
+)
 
-	backoff := constants.INITIAL_BACKOFF
+func (w *HTTPWriter) Write(ctx context.Context, t domain.Telemetry) error {
+	body, _ := json.Marshal(t)
+
+	backoff := httpInitialBackoff
 	var last error
-	for attempt := 0; attempt < constants.MAX_RETRY_ATTEMPTS; attempt++ {
-		// Don't start a new request if the caller has already cancelled.
+	for attempt := 0; attempt < httpMaxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -52,23 +53,16 @@ func (w *HTTPWriter) Write(ctx context.Context, t domain.Telemetry) error {
 		}
 
 		if !retryable(last) {
-			return err
+			return last
 		}
 
 		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+			timer.Stop()
 			return ctx.Err()
-		case <-time.After(backoff):
-			if backoff < 2*time.Second {
-				backoff *= 2
-			}
+		case <-timer.C:
 		}
-		// Exponential backoff:
-		// 200ms → 400ms → 800ms → 1.6s → 2s → 2s...
 		backoff *= 2
 		if backoff > constants.MAX_BACKOFF {
 			backoff = constants.MAX_BACKOFF

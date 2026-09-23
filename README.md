@@ -135,6 +135,8 @@ data/                full DCGM CSV
 deploy/helm          Helm chart (primary Kubernetes install)
 ```
 
+## forward to localhost:
+kubectl -n gpu-telemetry port-forward service/gpu-gateway 8080:8080
 ## AI assistance
 
 See [docs/AI_ASSISTANCE.md](docs/AI_ASSISTANCE.md) for prompts, what the model generated, and where manual fixes were required.

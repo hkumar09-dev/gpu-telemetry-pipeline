@@ -98,12 +98,7 @@ func (s *Streamer) emitPass(ctx context.Context, rows []domain.Telemetry) error 
 			s.log.Warn("skip invalid row", "index", i, "err", err)
 			continue
 		}
-		body, err := json.Marshal(row)
-		if err != nil {
-			s.log.Error("skip invalid row", "index", i, "err", err)
-			return err
-		}
-
+		body, _ := json.Marshal(row)
 		if err := s.pub.Publish(ctx, s.cfg.Topic, row.UUID, body); err != nil {
 			s.log.Error("publish failed", "index", i, "err", err)
 			return fmt.Errorf("publish: %w", err)

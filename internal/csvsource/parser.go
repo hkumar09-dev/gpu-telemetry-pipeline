@@ -111,30 +111,23 @@ func Parse(ctx context.Context, r io.Reader) ([]domain.Telemetry, error) {
 			}
 			line++
 			if err != nil {
-				select {
-				case results <- result{
+				results <- result{
 					line: line,
 					err:  fmt.Errorf("csv line %d: %w", line, err),
-				}:
-				case <-ctx.Done():
 				}
 				return
 			}
 			if len(rec) < expectedColumns {
-				select {
-				case results <- result{
+				results <- result{
 					line: line,
 					err: fmt.Errorf(
 						"csv line %d: expected %d columns, got %d",
 						line,
 						expectedColumns,
 						len(rec),
-					)}:
-				case <-ctx.Done():
-
-					return
+					),
 				}
-
+			} else {
 				select {
 				case jobs <- job{line: line, rec: rec}:
 				case <-ctx.Done():

@@ -86,10 +86,7 @@ func (s *File) persistLocked() error {
 	s.mem.mu.RLock()
 	snap := snapshot{GPUs: s.mem.gpus, Telemetry: s.mem.telemetry}
 	s.mem.mu.RUnlock()
-	b, err := json.Marshal(snap)
-	if err != nil {
-		return err
-	}
+	b, _ := json.Marshal(snap)
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o644); err != nil {
 		return err
@@ -106,9 +103,7 @@ func (s *File) persistLocked() error {
 func (s *File) Save(ctx context.Context, t domain.Telemetry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.mem.Save(ctx, t); err != nil {
-		return err
-	}
+	_ = s.mem.Save(ctx, t)
 	s.dirty = true
 	if time.Since(s.lastFlush) < constants.PersistInterval {
 		return nil

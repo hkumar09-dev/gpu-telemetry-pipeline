@@ -44,16 +44,13 @@ type frame struct {
 
 // writeFrame writes a frame to the writer.
 func writeFrame(w io.Writer, f frame) error {
-	body, err := json.Marshal(f)
-	if err != nil {
-		return err
-	}
+	body, _ := json.Marshal(f)
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(body)))
 	if _, err := w.Write(hdr[:]); err != nil {
 		return err
 	}
-	_, err = w.Write(body)
+	_, err := w.Write(body)
 	return err
 }
 

@@ -12,59 +12,52 @@ import (
 	"github.com/gpu-telemetry-pipeline/utils"
 )
 
-func main() {
+var osExit = os.Exit
 
-	// Setup logging
+func main() {
+	if err := run(context.Background()); err != nil {
+		osExit(1)
+	}
+}
+
+func run(parent context.Context) error {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	addr := utils.Getenv("MQ_ADDR", ":9000")
 	engine := mq.NewEngine(mq.Config{MaxRetries: 5, RetryBackoff: 5 * time.Millisecond})
 
-	// Context is cancelled when SIGINT/SIGTERM is received.
-	ctx, stop := signal.NotifyContext(
-		context.Background(),
-		syscall.SIGINT,
-		syscall.SIGTERM,
-	)
-
+	ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	srv := mq.NewServer(ctx, engine, log)
 
-	// Start broker.
 	serverErr := make(chan error, 1)
 	go func() {
 		log.Info("starting broker", "addr", addr)
 		if err := srv.ListenAndServe(addr); err != nil {
 			log.Error("broker stopped", "err", err)
-			os.Exit(1)
+			serverErr <- err
+			return
 		}
+		serverErr <- nil
 	}()
 
-	// Wait for either:
-	// 1. shutdown signal
-	// 2. server failure
 	select {
 	case <-ctx.Done():
 		log.Info("shutdown signal received")
-
 	case err := <-serverErr:
-		log.Error("broker stopped unexpectedly", "err", err)
+		if err != nil {
+			log.Error("broker stopped unexpectedly", "err", err)
+			_ = srv.Close()
+			return err
+		}
 	}
 
-	// Give in-flight operations time to finish.
-	shutdownCtx, cancel := context.WithTimeout(
-		context.Background(),
-		10*time.Second,
-	)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	_ = shutdownCtx
 
 	log.Info("shutdown signal received")
-	if err := srv.Close(); err != nil {
-		log.Error("broker shutdown failed", "err", err)
-	}
-
-	// Keep shutdown context available
-	// graceful shutdown with context.
-	_ = shutdownCtx
+	_ = srv.Close()
 	log.Info("broker shutdown complete")
+	return nil
 }

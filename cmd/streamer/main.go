@@ -19,13 +19,23 @@ import (
 	"github.com/gpu-telemetry-pipeline/utils"
 )
 
-// streamer main function
+var (
+	maxPublishAttempts    = constants.MAX_RETRY_ATTEMPTS
+	osExit                = os.Exit
+	initialPublishBackoff = constants.INITIAL_BACKOFF
+)
+
 func main() {
+	if err := run(context.Background()); err != nil {
+		osExit(1)
+	}
+}
+
+func run(parent context.Context) error {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// create streamer
 	s := streamer.New(
 		csvsource.FileSource{Path: utils.Getenv("CSV_PATH", "/data/dcgm_metrics.csv")},
 		retryPublisher{inner: mq.NewClient(utils.Getenv("MQ_ADDR", "127.0.0.1:9000")), log: log},
@@ -42,8 +52,9 @@ func main() {
 
 	if err := s.Run(ctx); err != nil && ctx.Err() == nil {
 		log.Error("streamer failed", "err", err)
-		os.Exit(1)
+		return err
 	}
+	return nil
 }
 
 func shardIndex() int {
@@ -84,16 +95,10 @@ type retryPublisher struct {
 	log   *slog.Logger
 }
 
-// Publish retries the publish operation with exponential backoff.
-func (p retryPublisher) Publish(
-	ctx context.Context,
-	topic, key string,
-	payload []byte,
-) error {
-	backoff := constants.INITIAL_BACKOFF
+func (p retryPublisher) Publish(ctx context.Context, topic, key string, payload []byte) error {
+	backoff := initialPublishBackoff
 
-	for attempt := 1; attempt <= constants.MAX_RETRY_ATTEMPTS; attempt++ {
-		// Don't attempt the publish if the caller has already cancelled.
+	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -103,45 +108,28 @@ func (p retryPublisher) Publish(
 			return nil
 		}
 
-		// If the operation was cancelled/deadlined, stop immediately.
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
-		if attempt == constants.MAX_RETRY_ATTEMPTS {
-			p.log.Error(
-				"publish failed, max retries reached",
-				"attempt", attempt,
-				"err", err,
-			)
+		if attempt >= maxPublishAttempts {
+			p.log.Error("publish failed, max retries reached", "attempt", attempt, "err", err)
 			return err
 		}
 
-		p.log.Error(
-			"publish failed, retrying",
-			"attempt", attempt,
-			"backoff", backoff,
-			"err", err,
-		)
+		p.log.Error("publish failed, retrying", "attempt", attempt, "backoff", backoff, "err", err)
 
 		timer := time.NewTimer(backoff)
-
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+			timer.Stop()
 			return ctx.Err()
-
 		case <-timer.C:
 		}
 
-		// Exponential backoff with a cap.
 		backoff *= 2
 		if backoff > constants.MAX_BACKOFF {
 			backoff = constants.MAX_BACKOFF
 		}
 	}
-
-	return nil // unreachable
 }

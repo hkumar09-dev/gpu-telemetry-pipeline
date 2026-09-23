@@ -2,7 +2,9 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +13,8 @@ import (
 	"github.com/gpu-telemetry-pipeline/internal/domain"
 	"github.com/gpu-telemetry-pipeline/internal/storage"
 )
+
+var errBoom = errors.New("boom")
 
 func TestListAndQuery(t *testing.T) {
 	repo := storage.NewMemory()
@@ -92,5 +96,78 @@ func TestHealthAndOpenAPI(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil))
 	if rec.Code != 200 || rec.Body.Len() == 0 {
 		t.Fatal("expected openapi body")
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/livez/", nil))
+	if rec.Code != 200 {
+		t.Fatalf("livez slash %d", rec.Code)
+	}
+}
+
+type errRepo struct {
+	save  error
+	list  error
+	query error
+	gpus  []domain.GPU
+}
+
+func (e errRepo) Save(context.Context, domain.Telemetry) error { return e.save }
+func (e errRepo) ListGPUs(context.Context) ([]domain.GPU, error) {
+	return e.gpus, e.list
+}
+func (e errRepo) QueryByGPU(context.Context, string, domain.TimeWindow) ([]domain.Telemetry, error) {
+	return nil, e.query
+}
+
+func TestServiceErrorPaths(t *testing.T) {
+	h := NewHandler(NewService(errRepo{list: errBoom, gpus: nil}, nil))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("list %d", rec.Code)
+	}
+
+	h = NewHandler(NewService(errRepo{}, nil))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty list %d", rec.Code)
+	}
+
+	h = NewHandler(NewService(errRepo{query: errBoom}, nil))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus/x/telemetry", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("query %d", rec.Code)
+	}
+
+	h = NewHandler(NewService(errRepo{save: errBoom}, nil))
+	body := []byte(`{"processed_at":"2026-01-01T00:00:00Z","metric_name":"m","uuid":"g"}`)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/internal/v1/telemetry", bytes.NewReader(body)))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("save %d", rec.Code)
+	}
+
+	svc := NewService(storage.NewMemory(), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/gpus/x/telemetry", nil)
+	req.SetPathValue("id", "  ")
+	rec = httptest.NewRecorder()
+	svc.queryTelemetry(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty id %d", rec.Code)
+	}
+
+	h = NewHandler(NewService(storage.NewMemory(), nil))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus/x/telemetry?end_time=nope", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("end_time %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus/missing/telemetry", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty telemetry %d", rec.Code)
 	}
 }
