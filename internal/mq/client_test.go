@@ -3,6 +3,7 @@ package mq
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"testing"
@@ -57,7 +58,7 @@ func TestClientConsumeTimeout(t *testing.T) {
 	}
 	defer cons.Close()
 	_, err = cons.Consume(ctx, 30*time.Millisecond)
-	if err != constants.ErrTimeout {
+	if !errors.Is(err, constants.ErrTimeout) {
 		t.Fatalf("want timeout, got %v", err)
 	}
 }
@@ -91,8 +92,8 @@ func TestClientPublishBackpressureError(t *testing.T) {
 	if err := c.Publish(ctx, "t", "k", []byte("1")); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Publish(ctx, "t", "k", []byte("2")); err == nil {
-		t.Fatal("expected backpressure")
+	if err := c.Publish(ctx, "t", "k", []byte("2")); err == nil || !errors.Is(err, constants.ErrBackpressure) {
+		t.Fatalf("expected backpressure, got %v", err)
 	}
 }
 

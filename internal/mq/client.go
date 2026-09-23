@@ -44,13 +44,16 @@ type frame struct {
 
 // writeFrame writes a frame to the writer.
 func writeFrame(w io.Writer, f frame) error {
-	body, _ := json.Marshal(f)
+	body, err := json.Marshal(f)
+	if err != nil {
+		return fmt.Errorf("encode frame: %w", err)
+	}
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(body)))
 	if _, err := w.Write(hdr[:]); err != nil {
 		return err
 	}
-	_, err := w.Write(body)
+	_, err = w.Write(body)
 	return err
 }
 
@@ -70,7 +73,7 @@ func readFrame(r *bufio.Reader) (frame, error) {
 	}
 	var f frame
 	if err := json.Unmarshal(body, &f); err != nil {
-		return frame{}, err
+		return frame{}, fmt.Errorf("decode frame: %w", err)
 	}
 	return f, nil
 }
@@ -96,22 +99,22 @@ func NewClient(addr string) *Client {
 func (c *Client) Publish(ctx context.Context, topic, key string, payload []byte) error {
 	conn, err := c.dial(ctx, c.addr)
 	if err != nil {
-		return err
+		return fmt.Errorf("queue unavailable: %w", err)
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(deadline(ctx, 10*time.Second))
 	br := bufio.NewReader(conn)
 	if err := writeFrame(conn, frame{Op: opPublish, Topic: topic, Key: key, Payload: payload}); err != nil {
-		return err
+		return fmt.Errorf("producer disconnect: %w", err)
 	}
 
 	resp, err := readFrame(br)
 	if err != nil {
-		return err
+		return fmt.Errorf("producer disconnect: %w", err)
 	}
 
 	if resp.Error != "" {
-		return fmt.Errorf("%s", resp.Error)
+		return mapBrokerError("publish", resp.Error)
 	}
 
 	return nil
@@ -121,22 +124,22 @@ func (c *Client) Publish(ctx context.Context, topic, key string, payload []byte)
 func (c *Client) Subscribe(ctx context.Context, topic, group, consumerID string) (ports.Consumer, error) {
 	conn, err := c.dial(ctx, c.addr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("queue unavailable: %w", err)
 	}
 	_ = conn.SetDeadline(deadline(ctx, 10*time.Second))
 	br := bufio.NewReader(conn)
 	if err := writeFrame(conn, frame{Op: opSub, Topic: topic, Group: group, ConsumerID: consumerID}); err != nil {
 		conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("consumer disconnect: %w", err)
 	}
 	resp, err := readFrame(br)
 	if err != nil {
 		conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("consumer disconnect: %w", err)
 	}
 	if resp.Error != "" {
 		conn.Close()
-		return nil, fmt.Errorf("%s", resp.Error)
+		return nil, mapBrokerError("subscribe", resp.Error)
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return &tcpConsumer{
@@ -169,7 +172,7 @@ func (c *tcpConsumer) Consume(ctx context.Context, timeout time.Duration) (ports
 		ConsumerID: c.consumerID,
 		TimeoutMS:  timeout.Milliseconds(),
 	}); err != nil {
-		return ports.Delivery{}, err
+		return ports.Delivery{}, fmt.Errorf("consumer disconnect: %w", err)
 	}
 
 	if err := c.conn.SetReadDeadline(deadline(ctx, timeout+2*time.Second)); err != nil {
@@ -180,13 +183,10 @@ func (c *tcpConsumer) Consume(ctx context.Context, timeout time.Duration) (ports
 
 	_ = c.conn.SetReadDeadline(time.Time{})
 	if err != nil {
-		return ports.Delivery{}, err
+		return ports.Delivery{}, fmt.Errorf("consumer disconnect: %w", err)
 	}
 	if resp.Error != "" {
-		if resp.Error == constants.ErrTimeout.Error() {
-			return ports.Delivery{}, constants.ErrTimeout
-		}
-		return ports.Delivery{}, fmt.Errorf("%s", resp.Error)
+		return ports.Delivery{}, mapBrokerError("consume", resp.Error)
 	}
 	return ports.Delivery{
 		ID:        resp.ID,
@@ -218,15 +218,15 @@ func (c *tcpConsumer) ctrl(ctx context.Context, o op, id string) error {
 		ConsumerID: c.consumerID,
 		ID:         id,
 	}); err != nil {
-		return err
+		return fmt.Errorf("consumer disconnect: %w", err)
 	}
 
 	resp, err := readFrame(c.reader)
 	if err != nil {
-		return err
+		return fmt.Errorf("consumer disconnect: %w", err)
 	}
 	if resp.Error != "" {
-		return fmt.Errorf("%s", resp.Error)
+		return mapBrokerError(string(o), resp.Error)
 	}
 
 	return nil
@@ -244,4 +244,21 @@ func deadline(ctx context.Context, fallback time.Duration) time.Time {
 		return dl
 	}
 	return time.Now().Add(fallback)
+}
+
+func mapBrokerError(op, msg string) error {
+	switch msg {
+	case constants.ErrBackpressure.Error():
+		return fmt.Errorf("queue full: %w", constants.ErrBackpressure)
+	case constants.ErrClosed.Error():
+		return fmt.Errorf("queue unavailable: %w", constants.ErrClosed)
+	case constants.ErrTimeout.Error():
+		return fmt.Errorf("%s: %w", op, constants.ErrTimeout)
+	case constants.ErrUnknownMsg.Error():
+		return fmt.Errorf("%s: %w", op, constants.ErrUnknownMsg)
+	case constants.ErrNotOwner.Error():
+		return fmt.Errorf("%s: %w", op, constants.ErrNotOwner)
+	default:
+		return fmt.Errorf("%s: %s", op, msg)
+	}
 }

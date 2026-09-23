@@ -18,7 +18,10 @@ func TestConstants(t *testing.T) {
 }
 
 func TestErrors(t *testing.T) {
-	for _, err := range []error{ErrBackpressure, ErrTimeout, ErrClosed, ErrUnknownMsg, ErrNotOwner} {
+	for _, err := range []error{
+		ErrBackpressure, ErrTimeout, ErrClosed, ErrUnknownMsg, ErrNotOwner,
+		ErrUnavailable, ErrUnknownGPU, ErrInvalidTime, ErrInvalidPayload,
+	} {
 		if err == nil || err.Error() == "" {
 			t.Fatalf("empty error %+v", err)
 		}

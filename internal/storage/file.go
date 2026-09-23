@@ -84,7 +84,7 @@ func (s *File) load() error {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return err
+		return fmt.Errorf("stat store: %w", err)
 	}
 	if info.Size() > constants.MaxStoreBytes {
 		s.log.Warn("store too large, resetting", "path", s.path, "bytes", info.Size())
@@ -92,7 +92,7 @@ func (s *File) load() error {
 	}
 	b, err := os.ReadFile(s.path)
 	if err != nil {
-		return err
+		return fmt.Errorf("read store: %w", err)
 	}
 
 	var snap snapshot
@@ -118,10 +118,10 @@ func (s *File) persistLocked() error {
 	b, _ := json.Marshal(snap)
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
+		return fmt.Errorf("persist telemetry: %w", err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
-		return err
+		return fmt.Errorf("persist telemetry: %w", err)
 	}
 	s.dirty = false
 	s.lastFlush = time.Now()
@@ -130,13 +130,13 @@ func (s *File) persistLocked() error {
 
 func (s *File) acquireWrite(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("persist telemetry: %w", err)
 	}
 	select {
 	case s.writes <- struct{}{}:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("persist telemetry: %w", ctx.Err())
 	}
 }
 
@@ -155,13 +155,15 @@ func (s *File) Save(ctx context.Context, t domain.Telemetry) error {
 	defer s.releaseWrite()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_ = s.mem.Save(ctx, t)
+	if err := s.mem.Save(ctx, t); err != nil {
+		return err
+	}
 	s.dirty = true
 	if time.Since(s.lastFlush) < constants.PersistInterval {
 		return nil
 	}
 	if err := s.persistLocked(); err != nil {
-		return fmt.Errorf("persist %s: %w", s.path, err)
+		return err
 	}
 	return nil
 }

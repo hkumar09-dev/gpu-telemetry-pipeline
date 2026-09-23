@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -123,7 +124,7 @@ func (p retryPublisher) Publish(ctx context.Context, topic, key string, payload 
 
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return fmt.Errorf("publish: %w", err)
 		}
 
 		err := p.inner.Publish(ctx, topic, key, payload)
@@ -132,12 +133,12 @@ func (p retryPublisher) Publish(ctx context.Context, topic, key string, payload 
 		}
 
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return fmt.Errorf("publish: %w", ctx.Err())
 		}
 
 		if attempt >= maxPublishAttempts {
 			p.log.Error("publish failed, max retries reached", "attempt", attempt, "err", err)
-			return err
+			return fmt.Errorf("publish: %w", err)
 		}
 
 		p.log.Error("publish failed, retrying", "attempt", attempt, "backoff", backoff, "err", err)
@@ -146,7 +147,7 @@ func (p retryPublisher) Publish(ctx context.Context, topic, key string, payload 
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return fmt.Errorf("publish: %w", ctx.Err())
 		case <-timer.C:
 		}
 

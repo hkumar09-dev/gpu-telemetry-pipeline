@@ -165,6 +165,11 @@ func (s *Server) Addr() string {
 
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
+	defer func() {
+		if rec := recover(); rec != nil {
+			s.log.Error("conn handler panic", "panic", rec)
+		}
+	}()
 	br := bufio.NewReader(conn)
 	var sub *struct{ topic, group, id string }
 	for {

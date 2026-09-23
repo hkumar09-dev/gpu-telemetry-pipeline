@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gpu-telemetry-pipeline/constants"
 	"github.com/gpu-telemetry-pipeline/internal/domain"
 	"github.com/gpu-telemetry-pipeline/internal/storage"
 )
@@ -201,7 +202,59 @@ func TestServiceErrorPaths(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus/missing/telemetry", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown gpu %d", rec.Code)
+	}
+
+	h = NewHandler(NewService(errRepo{query: context.DeadlineExceeded}, quietLog()))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus/x/telemetry", nil))
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("query timeout %d", rec.Code)
+	}
+
+	h = NewHandler(NewService(errRepo{list: constants.ErrUnavailable}, quietLog()))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("list unavailable %d", rec.Code)
+	}
+
+	h = NewHandler(NewService(errRepo{save: constants.ErrUnavailable}, quietLog()))
+	body = []byte(`{"processed_at":"2026-01-01T00:00:00Z","metric_name":"m","uuid":"g"}`)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/internal/v1/telemetry", bytes.NewReader(body)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("save unavailable %d", rec.Code)
+	}
+
+	h = NewHandler(NewService(errRepo{save: context.DeadlineExceeded}, quietLog()))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/internal/v1/telemetry", bytes.NewReader(body)))
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("save timeout %d", rec.Code)
+	}
+
+	repo := storage.NewMemory()
+	_ = repo.Save(context.Background(), domain.Telemetry{
+		UUID: "known", MetricName: "m", ProcessedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	h = NewHandler(NewService(repo, quietLog()))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/gpus/known/telemetry?start_time=2027-01-01T00:00:00Z", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("empty telemetry %d", rec.Code)
+		t.Fatalf("known gpu empty window %d", rec.Code)
+	}
+
+	body = []byte(`{"processed_at":"2026-01-01T00:00:00Z","metric_name":"m","uuid":"dup"}`)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/internal/v1/telemetry", bytes.NewReader(body)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("first ingest %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/internal/v1/telemetry", bytes.NewReader(body)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("duplicate ingest %d", rec.Code)
 	}
 }

@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -10,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gpu-telemetry-pipeline/constants"
 	"github.com/gpu-telemetry-pipeline/internal/domain"
 	"github.com/gpu-telemetry-pipeline/internal/metrics"
 	"github.com/gpu-telemetry-pipeline/internal/ports"
@@ -61,7 +64,7 @@ func (a *Service) ready(w http.ResponseWriter, r *http.Request) {
 func (a *Service) listGPUs(w http.ResponseWriter, r *http.Request) {
 	gpus, err := a.repo.ListGPUs(r.Context())
 	if err != nil {
-		a.fail(w, http.StatusInternalServerError, err)
+		a.fail(w, err)
 		return
 	}
 	if gpus == nil {
@@ -86,11 +89,27 @@ func (a *Service) queryTelemetry(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := a.repo.QueryByGPU(r.Context(), id, window)
 	if err != nil {
-		a.fail(w, http.StatusInternalServerError, err)
+		a.fail(w, err)
 		return
 	}
 
-	if rows == nil {
+	if len(rows) == 0 {
+		gpus, err := a.repo.ListGPUs(r.Context())
+		if err != nil {
+			a.fail(w, err)
+			return
+		}
+		found := false
+		for _, g := range gpus {
+			if g.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			a.fail(w, fmt.Errorf("unknown gpu %s: %w", id, constants.ErrUnknownGPU))
+			return
+		}
 		rows = []domain.Telemetry{}
 	}
 
@@ -117,7 +136,7 @@ func (a *Service) ingest(w http.ResponseWriter, r *http.Request) {
 
 	if err := a.repo.Save(r.Context(), t); err != nil {
 		a.log.Error("error in saving", "err", err)
-		a.fail(w, http.StatusInternalServerError, err)
+		a.fail(w, fmt.Errorf("persist telemetry: %w", err))
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
@@ -128,9 +147,25 @@ func (a *Service) openapi(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(OpenAPISpec))
 }
 
-func (a *Service) fail(w http.ResponseWriter, code int, err error) {
+func (a *Service) fail(w http.ResponseWriter, err error) {
+	code := httpStatus(err)
 	a.log.Error("request failed", "err", err)
 	writeJSON(w, code, map[string]string{"error": http.StatusText(code)})
+}
+
+func httpStatus(err error) int {
+	switch {
+	case errors.Is(err, constants.ErrUnknownGPU):
+		return http.StatusNotFound
+	case errors.Is(err, constants.ErrInvalidTime), errors.Is(err, constants.ErrInvalidPayload):
+		return http.StatusBadRequest
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, constants.ErrTimeout):
+		return http.StatusGatewayTimeout
+	case errors.Is(err, context.Canceled), errors.Is(err, constants.ErrUnavailable), errors.Is(err, constants.ErrClosed):
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 func (a *Service) parseWindow(r *http.Request) (domain.TimeWindow, error) {
@@ -140,7 +175,7 @@ func (a *Service) parseWindow(r *http.Request) (domain.TimeWindow, error) {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
 			a.log.Error("failed to parse start_time", "err", err)
-			return w, err
+			return w, fmt.Errorf("%w: start_time: %v", constants.ErrInvalidTime, err)
 		}
 
 		u := t.UTC()
@@ -150,7 +185,7 @@ func (a *Service) parseWindow(r *http.Request) (domain.TimeWindow, error) {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
 			a.log.Error("failed to parse end_time", "err", err)
-			return w, err
+			return w, fmt.Errorf("%w: end_time: %v", constants.ErrInvalidTime, err)
 		}
 
 		u := t.UTC()

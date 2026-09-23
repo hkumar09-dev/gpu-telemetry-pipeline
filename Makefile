@@ -1,4 +1,4 @@
-.PHONY: test coverage coverage-html openapi build docker-build tidy helm-deploy helm-delete
+.PHONY: test test-race coverage coverage-html openapi build docker-build tidy helm-deploy helm-delete
 
 COVERPKG := ./...
 
@@ -9,6 +9,9 @@ CHART := deploy/helm/gpu-telemetry
 
 test:
 	go test ./...
+
+test-race:
+	go test -race ./...
 
 coverage:
 	go test -coverprofile=coverage.out -covermode=atomic -coverpkg=$(COVERPKG) ./...

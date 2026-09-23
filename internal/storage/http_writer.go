@@ -43,13 +43,16 @@ func NewHTTPWriter(baseURL string) *HTTPWriter {
 }
 
 func (w *HTTPWriter) Write(ctx context.Context, t domain.Telemetry) error {
-	body, _ := json.Marshal(t)
+	body, err := json.Marshal(t)
+	if err != nil {
+		return fmt.Errorf("persist telemetry: %w", err)
+	}
 
 	backoff := w.initialBackoff
 	var last error
 	for attempt := 0; attempt < w.maxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return fmt.Errorf("persist telemetry: %w", err)
 		}
 
 		last = w.post(ctx, body)
@@ -58,14 +61,14 @@ func (w *HTTPWriter) Write(ctx context.Context, t domain.Telemetry) error {
 		}
 
 		if !retryable(last) {
-			return last
+			return fmt.Errorf("persist telemetry: %w", last)
 		}
 
 		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return fmt.Errorf("persist telemetry: %w", ctx.Err())
 		case <-timer.C:
 		}
 		backoff *= 2
@@ -74,7 +77,7 @@ func (w *HTTPWriter) Write(ctx context.Context, t domain.Telemetry) error {
 		}
 	}
 
-	return last
+	return fmt.Errorf("persist telemetry: %w", last)
 }
 
 // can also use backoffWithJitter
@@ -133,7 +136,8 @@ func retryable(err error) bool {
 		strings.Contains(msg, "connection reset"),
 		strings.Contains(msg, "no such host"),
 		strings.Contains(msg, "ingest status 502"),
-		strings.Contains(msg, "ingest status 503"):
+		strings.Contains(msg, "ingest status 503"),
+		strings.Contains(msg, "ingest status 504"):
 		return true
 	default:
 		// non-retryable error or not transient

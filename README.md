@@ -86,7 +86,7 @@ Delivery is **at-least-once** with explicit ack:
 4. If `AckTimeout` (default 30s) expires, the message is retried the same way.
 5. Unsubscribe of a consumer requeues that consumer’s in-flight messages.
 6. After `MaxRetries` (broker default **5**), the payload is published to `{topic}.dlq` (for example `gpu-telemetry.dlq`).
-7. Duplicate ingest is possible after a crash between gateway persist and ack. The API does not deduplicate.
+7. Duplicate ingest (same UUID + `processed_at` + `metric_name`) is treated as idempotent at the store: the second save is a no-op and still returns HTTP **202**.
 
 ## 6. Retry strategy
 
@@ -102,13 +102,23 @@ Invalid JSON / validation failures are nacked (broker retry/DLQ) and are **not**
 
 ## 7. Failure handling
 
-- **Bad CSV row**: streamer skips it and continues.
-- **Bad MQ payload**: collector nacks; broker retries then DLQ.
-- **Gateway down**: HTTP writer retries; collector nacks remaining work; streamer hits backpressure/retries on publish.
-- **Broker full**: publish returns `ErrBackpressure`; streamer retries then fails the process if still blocked.
-- **Store file too large** (> 32 MiB): gateway resets the JSON file and logs a warning.
-- **JSON store corrupt**: gateway fails to start (`open db`).
-- Consume timeouts and context cancel are idle/shutdown, not errors.
+Operational errors are wrapped (`fmt.Errorf("persist telemetry: %w", err)`) and never panic.
+
+| Case | Behavior |
+| --- | --- |
+| Malformed CSV row | Parser skips the row; unrecoverable I/O still fails the load. |
+| Invalid telemetry | Streamer skips; collector wraps `ErrInvalidPayload` and nacks (broker retry/DLQ). Ingest returns **400**. |
+| Database unavailable | Persist wraps the error. Gateway **503**. Collector retries then nacks. |
+| Database timeout | Persist wraps `context.DeadlineExceeded` / timeout. Gateway **504**. |
+| Queue unavailable | Client wraps dial/closed as `queue unavailable`. Streamer retries then exits. |
+| Queue full | `queue full: %w` (`ErrBackpressure`). Streamer retries with backoff. |
+| Consumer / producer disconnect | Wrapped as `consumer disconnect` / `producer disconnect`. Broker recovers handler panics. |
+| Duplicate message | Idempotent save; ingest **202**. |
+| Invalid API timestamp | `ErrInvalidTime` → **400**. |
+| Unknown GPU | `ErrUnknownGPU` → **404**. Known GPU with no points in the window → **200** `[]`. |
+| Context cancellation | Propagated with `%w`. Processes shut down; in-flight HTTP **503**. |
+
+Also: store file > 32 MiB is reset with a warning; corrupt JSON store fails gateway start. Consume idle timeout is not an error.
 
 ## 8. Backpressure strategy
 
@@ -188,7 +198,7 @@ Base URL: `http://localhost:8080` (see `api/openapi.yaml`).
 | `GET` | `/api/v1/gpus/{id}/telemetry?start_time=RFC3339&end_time=RFC3339` | Inclusive window |
 | `POST` | `/internal/v1/telemetry` | Collector ingest (not a public product API) |
 
-`{id}` is the GPU UUID from the CSV `uuid` column. Invalid RFC3339 filters return **400**.
+`{id}` is the GPU UUID from the CSV `uuid` column. Invalid RFC3339 filters return **400**. Unknown GPU UUID returns **404**. Store unavailable **503**; store timeout **504**.
 
 ## 12. Local development
 
@@ -197,6 +207,9 @@ Configuration is environment-only. Binaries use **development defaults** (localh
 ```bash
 make tidy
 make test
+make test-race
+make coverage
+make coverage-html
 make build             # binaries in bin/
 ```
 
@@ -385,28 +398,33 @@ More collectors than partitions (default 8) do not increase throughput. Collecto
 
 ## 18. Testing
 
+Unit tests use ports and in-process fakes (MQ `Engine`, `storage.Memory`, `httptest`). They do not require PostgreSQL, Kafka, or a running cluster.
+
 ```bash
 make test          # go test ./...
+make test-race     # go test -race ./...
 go test ./... -v
 ```
 
-Coverage of note:
+| Area | What is covered |
+| --- | --- |
+| Queue | Publish/consume, ack/nack, retry and ack-timeout redelivery, backpressure (`ErrBackpressure`), consumer failure, TCP client disconnect, `Server.Shutdown`, concurrent producers/consumers, DLQ |
+| Streamer | CSV parse (including skipped malformed rows), shard + loop, emit `processed_at`, publish failures, context cancel |
+| Collector | JSON parse, `Validate`, persist, nack on invalid payload, retryable persist, idempotent duplicate save |
+| API | List GPUs, telemetry query, `start_time`/`end_time`, invalid timestamps (**400**), unknown GPU (**404**), repository errors (**500**/**503**/**504**), ingest validation |
 
-- Broker: ack/nack, timeout redelivery, partition affinity, competing consumers, backpressure, TCP round-trip, DLQ
-- CSV parser, streamer shard + emit timestamp
-- Collector persist/nack
-- Memory + file window queries, HTTP writer retries
-- Gateway list/query, bad time filters, OpenAPI, ingest errors
-- Process `run()` hooks for SIGINT/SIGTERM without killing the test process
+`go test -race` is practical on the MQ engine/server (WaitGroup vs Shutdown) and HTTP tests. Process `run()` hooks cover SIGINT/SIGTERM without killing the test binary.
 
 ## 19. Code coverage
 
 ```bash
+make test
+make test-race
 make coverage          # coverage.out + go tool cover -func
 make coverage-html     # coverage.html
 ```
 
-`COVERPKG` is `./...` (atomic mode). Open `coverage.html` in a browser after `make coverage-html`.
+Coverage is measurable: `go test -coverprofile=coverage.out -covermode=atomic -coverpkg=./...` then `go tool cover -func=coverage.out`. Open `coverage.html` after `make coverage-html`.
 
 ## 20. OpenAPI generation
 
@@ -460,7 +478,7 @@ In-flight MQ deliveries that are still unacked when the **engine** closes are dr
 - Streamer/collector replicas stay ≤ 10 as specified for the exercise.
 - Broker is a single in-memory process: no WAL, no replication, restart drops the queue.
 - Gateway is one replica; the JSON file is not safe for multiple writers.
-- At-least-once ingest can duplicate telemetry after a crash.
+- At-least-once ingest can still duplicate if UUID/`processed_at`/`metric_name` differ (clock skew). Same-key duplicates are idempotent.
 - DLQ is another in-memory topic; nothing consumes it by default.
 - Compose streamer does not auto-shard when you `--scale streamer`.
 - No TLS or auth.
@@ -469,7 +487,7 @@ In-flight MQ deliveries that are still unacked when the **engine** closes are dr
 ## 24. Future improvements
 
 - Replicated broker (WAL + leader election) behind the existing `Engine` interface.
-- Deduplicated ingest (UUID + processed_at + metric) or idempotent keys.
+- Deduplicated ingest already keys UUID + processed_at + metric; extend if more fields should participate.
 - DLQ consumer and operator alerts.
 - Alerting rules and a Grafana dashboard on the existing `/metrics` series.
 - SQL or time-series backend if the JSON snapshot is too small.

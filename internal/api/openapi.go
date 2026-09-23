@@ -56,6 +56,10 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/GPU"
+        "503":
+          description: Store unavailable
+        "504":
+          description: Store timeout
   /api/v1/gpus/{id}/telemetry:
     get:
       summary: Query telemetry by GPU
@@ -93,6 +97,12 @@ paths:
                   $ref: "#/components/schemas/Telemetry"
         "400":
           description: Invalid time filter
+        "404":
+          description: Unknown GPU
+        "503":
+          description: Store unavailable
+        "504":
+          description: Store timeout
 components:
   schemas:
     GPU:

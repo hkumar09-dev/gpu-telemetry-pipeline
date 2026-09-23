@@ -29,9 +29,10 @@ type job struct {
 }
 
 type result struct {
-	line int
-	t    domain.Telemetry
-	err  error
+	line  int
+	t     domain.Telemetry
+	err   error
+	fatal bool
 }
 
 func (s FileSource) Load(ctx context.Context) ([]domain.Telemetry, error) {
@@ -83,17 +84,30 @@ func Parse(ctx context.Context, r io.Reader) ([]domain.Telemetry, error) {
 						return
 					}
 
-					t, err := rowToTelemetry(j.rec)
+					func() {
+						defer func() {
+							if rec := recover(); rec != nil {
+								select {
+								case results <- result{line: j.line, err: fmt.Errorf("csv line %d: %v", j.line, rec)}:
+								case <-ctx.Done():
+								}
+							}
+						}()
 
-					select {
-					case results <- result{
-						line: j.line,
-						t:    t,
-						err:  err,
-					}:
-					case <-ctx.Done():
-						return
-					}
+						t, err := rowToTelemetry(j.rec)
+						if err != nil {
+							select {
+							case results <- result{line: j.line, err: fmt.Errorf("csv line %d: %w", j.line, err)}:
+							case <-ctx.Done():
+							}
+							return
+						}
+
+						select {
+						case results <- result{line: j.line, t: t}:
+						case <-ctx.Done():
+						}
+					}()
 				}
 			}
 		}()
@@ -111,28 +125,26 @@ func Parse(ctx context.Context, r io.Reader) ([]domain.Telemetry, error) {
 			}
 			line++
 			if err != nil {
-				results <- result{
-					line: line,
-					err:  fmt.Errorf("csv line %d: %w", line, err),
+				if _, ok := err.(*csv.ParseError); ok {
+					continue
+				}
+				select {
+				case results <- result{
+					line:  line,
+					err:   fmt.Errorf("csv line %d: %w", line, err),
+					fatal: true,
+				}:
+				case <-ctx.Done():
 				}
 				return
 			}
 			if len(rec) < expectedColumns {
-				results <- result{
-					line: line,
-					err: fmt.Errorf(
-						"csv line %d: expected %d columns, got %d",
-						line,
-						expectedColumns,
-						len(rec),
-					),
-				}
-			} else {
-				select {
-				case jobs <- job{line: line, rec: rec}:
-				case <-ctx.Done():
-					return
-				}
+				continue
+			}
+			select {
+			case jobs <- job{line: line, rec: rec}:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
@@ -147,11 +159,16 @@ func Parse(ctx context.Context, r io.Reader) ([]domain.Telemetry, error) {
 	out := make([]domain.Telemetry, 0)
 
 	for result := range results {
-		if result.err != nil {
+		if result.fatal {
 			cancel()
 			return nil, result.err
 		}
-
+		if result.err != nil {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return out, fmt.Errorf("parse csv: %w", err)
+		}
 		out = append(out, result.t)
 	}
 

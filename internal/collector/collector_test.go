@@ -175,6 +175,12 @@ func TestRetryableWrite(t *testing.T) {
 	if !retryableWrite(fmt.Errorf("connection reset")) || !retryableWrite(fmt.Errorf("no such host")) {
 		t.Fatal("retry strings")
 	}
+	if !retryableWrite(fmt.Errorf("persist telemetry: %w", context.DeadlineExceeded)) {
+		t.Fatal("timeout")
+	}
+	if retryableWrite(fmt.Errorf("%w: bad", constants.ErrInvalidPayload)) {
+		t.Fatal("invalid payload")
+	}
 }
 
 func TestCollectorNacksInvalidJSON(t *testing.T) {

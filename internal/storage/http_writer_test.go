@@ -48,6 +48,9 @@ func TestRetryable(t *testing.T) {
 	if !retryable(fmt.Errorf("ingest status 503")) {
 		t.Fatal("503")
 	}
+	if !retryable(fmt.Errorf("ingest status 504")) {
+		t.Fatal("504")
+	}
 	if retryable(fmt.Errorf("ingest status 400")) {
 		t.Fatal("400 should not retry")
 	}

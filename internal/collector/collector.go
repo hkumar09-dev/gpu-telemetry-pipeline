@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -80,15 +81,15 @@ func (c *Collector) handle(ctx context.Context, d ports.Delivery) error {
 	var t domain.Telemetry
 	if err := json.Unmarshal(d.Payload, &t); err != nil {
 		c.log.Error("Error in marshalling of payload")
-		return err
+		return fmt.Errorf("%w: %v", constants.ErrInvalidPayload, err)
 	}
 	if err := t.Validate(); err != nil {
 		c.log.Error("Error in validating the response")
-		return err
+		return fmt.Errorf("%w: %v", constants.ErrInvalidPayload, err)
 	}
 	if err := c.writer.Write(ctx, t); err != nil {
 		metrics.CollectorPersistFailures.Inc()
-		return err
+		return fmt.Errorf("persist telemetry: %w", err)
 	}
 	metrics.CollectorPersisted.Inc()
 	return nil
@@ -114,8 +115,18 @@ func retryableWrite(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, constants.ErrInvalidPayload) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, constants.ErrTimeout) ||
+		errors.Is(err, constants.ErrUnavailable) || errors.Is(err, constants.ErrClosed) {
+		return true
+	}
 	msg := err.Error()
 	return strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "connection reset") ||
-		strings.Contains(msg, "no such host")
+		strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "ingest status 502") ||
+		strings.Contains(msg, "ingest status 503") ||
+		strings.Contains(msg, "ingest status 504")
 }

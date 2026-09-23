@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -33,10 +34,18 @@ func NewMemorySize(maxRecords int) *Memory {
 
 // Save stores a telemetry record.
 func (m *Memory) Save(ctx context.Context, t domain.Telemetry) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("persist telemetry: %w", err)
+	}
 	gpu := t.GPU()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.gpus[t.UUID] = gpu
+	for _, existing := range m.telemetry {
+		if existing.UUID == t.UUID && existing.MetricName == t.MetricName && existing.ProcessedAt.Equal(t.ProcessedAt) {
+			return nil
+		}
+	}
 	m.telemetry = append(m.telemetry, t)
 	if m.maxRecords > 0 && len(m.telemetry) > m.maxRecords {
 		m.telemetry = append([]domain.Telemetry(nil), m.telemetry[len(m.telemetry)-m.maxRecords:]...)
@@ -50,7 +59,10 @@ func (m *Memory) Write(ctx context.Context, t domain.Telemetry) error {
 }
 
 // ListGPUs lists all GPUs.
-func (m *Memory) ListGPUs(_ context.Context) ([]domain.GPU, error) {
+func (m *Memory) ListGPUs(ctx context.Context) ([]domain.GPU, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("list gpus: %w", err)
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]domain.GPU, 0, len(m.gpus))
@@ -69,7 +81,10 @@ func (m *Memory) ListGPUs(_ context.Context) ([]domain.GPU, error) {
 }
 
 // QueryByGPU queries telemetry records for a specific GPU.
-func (m *Memory) QueryByGPU(_ context.Context, gpuID string, window domain.TimeWindow) ([]domain.Telemetry, error) {
+func (m *Memory) QueryByGPU(ctx context.Context, gpuID string, window domain.TimeWindow) ([]domain.Telemetry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("query telemetry: %w", err)
+	}
 	var out []domain.Telemetry
 	m.mu.RLock()
 	defer m.mu.RUnlock()

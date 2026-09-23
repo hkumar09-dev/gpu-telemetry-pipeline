@@ -35,9 +35,12 @@ func TestParseBadHeader(t *testing.T) {
 
 func TestParseBadValue(t *testing.T) {
 	csv := strings.Replace(sampleCSV, `"10"`, `"nope"`, 1)
-	_, err := Parse(context.Background(), strings.NewReader(csv))
-	if err == nil {
-		t.Fatal("expected value error")
+	rows, err := Parse(context.Background(), strings.NewReader(csv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].UUID != "GPU-bbb" {
+		t.Fatalf("malformed row should be skipped, got %+v", rows)
 	}
 }
 
@@ -54,8 +57,12 @@ func TestFileSource(t *testing.T) {
 
 func TestParseShortRowAndBadColumn(t *testing.T) {
 	short := sampleCSV + "\n\"t\",\"m\",\"0\",\"d\",\"u\",\"mod\",\"h\",\"\",\"\",\"\",\"1\"\n"
-	if _, err := Parse(context.Background(), strings.NewReader(short)); err == nil {
-		t.Fatal("expected short row error")
+	rows, err := Parse(context.Background(), strings.NewReader(short))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("short row should be skipped, got %d", len(rows))
 	}
 	bad := strings.Replace(sampleCSV, "metric_name", "nope", 1)
 	if _, err := Parse(context.Background(), strings.NewReader(bad)); err == nil {
@@ -70,8 +77,12 @@ func TestParseShortRowAndBadColumn(t *testing.T) {
 		// cancelled parse may still succeed for tiny csv; either is acceptable
 	}
 	malformed := "timestamp,metric_name,gpu_id,device,uuid,modelName,Hostname,container,pod,namespace,value,labels_raw\n\"unterminated\n"
-	if _, err := Parse(context.Background(), strings.NewReader(malformed)); err == nil {
-		t.Fatal("expected csv parse error")
+	rows, err = Parse(context.Background(), strings.NewReader(malformed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("malformed csv row should be skipped, got %d", len(rows))
 	}
 }
 
